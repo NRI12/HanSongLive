@@ -128,9 +128,6 @@ body.transparent .stage { background: transparent; }
 .idle { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 1em; }
 .idle .ko { font: 900 calc(var(--u) * 14)/1 var(--ko-font); color: var(--ko); }
 
-.unmute { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 22px; padding: 16px 24px; border-radius: 14px;
-  border: 0; background: var(--ko); color: #2a0e18; font-weight: 800; cursor: pointer; z-index: 9; }
-
 /* vòng đặc biệt */
 .x2.boss { background: #ff4d6d; color: #fff; }
 .x2.listen { background: var(--vi); color: #08223a; animation: none; }

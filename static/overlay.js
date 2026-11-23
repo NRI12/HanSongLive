@@ -14,9 +14,16 @@ let last = { sound: "" }, feedSeq = -1, cfg = null;
 
 function play(url) {
   snd.src = q(url);
-  snd.play().catch(() => $("#unmute").classList.remove("hidden"));
+  // Không hiện nút trên màn live; lỗi thoáng qua (mạng, file đang tải) thì thử lại một lần.
+  const src = snd.src;
+  snd.play().catch(() => setTimeout(() => {
+    if (snd.src !== src) return;      // đã sang âm thanh khác
+    snd.load();                       // tải lại sau lỗi mạng/500
+    snd.play().catch(() => {});
+  }, 1000));
 }
-$("#unmute").addEventListener("click", () => { $("#unmute").classList.add("hidden"); snd.play().catch(() => {}); });
+// Trình duyệt chặn tự phát: bấm vào bất kỳ đâu trên trang để mở khoá âm thanh.
+document.addEventListener("click", () => { if (snd.paused && !snd.ended && snd.src) snd.play().catch(() => {}); });
 
 /* ---------------------------------------------------------------- thông báo lớn */
 const alerts = [];
@@ -84,7 +91,7 @@ function badge(Q) {
   if (Q.special === "boss") b.push(`<span class="x2 boss">👹 BOSS x${Q.mult}</span>`);
   else if (Q.double) b.push(`<span class="x2">x2 ĐIỂM</span>`);
   if (Q.special === "listen") b.push(`<span class="x2 listen">🎧 NGHE</span>`);
-  return b.length ? b.join(" ") : `<span>TOPIK ${esc(Q.word.level || "")}</span>`;
+  return b.join(" ");
 }
 
 function renderQuestion(s) {
@@ -109,7 +116,6 @@ function renderQuestion(s) {
     let body = `<div class="card ${Q.special ? "sp-" + Q.special : ""}">
       <div class="qhead"><span>Câu ${s.round + 1} · ${ask}</span>${badge(Q)}</div>
       <div class="prompt ${Q.listen ? "listen" : Q.prompt_lang}${sentence ? " sent" : ""}">${promptHtml(Q)}</div>
-      <div class="sub">${esc(Q.word.romanization || "")}</div>
       ${Q.hint ? `<div class="hint">${Q.mode === "hanviet" ? "Nghĩa: " : "💬 "}${esc(Q.hint)}</div>` : ""}
       <div class="timer ${s.remaining < 5 ? "low" : ""}"><i style="width:${pct}%"></i></div>
       <div class="sub">⏱ ${Math.ceil(s.remaining)} giây${Q.extra ? ` <b class="extra">+${Q.extra}s nhờ quà</b>` : ""} · ${Q.answered} người đã trả lời</div>
@@ -123,7 +129,7 @@ function renderQuestion(s) {
   return `<div class="card reveal ${Q.special ? "sp-" + Q.special : ""}">
       <div class="qhead"><span>Đáp án câu ${s.round}</span>${badge(Q)}</div>
       <div class="ko">${esc(w.korean)}</div>
-      <div class="sub">${esc(w.romanization)}${w.hanviet ? ` · <span class="hv">${esc(w.hanviet)}</span>` : ""}${w.pos ? " · " + esc(w.pos) : ""}</div>
+      ${w.hanviet || w.pos ? `<div class="sub">${[w.hanviet ? `<span class="hv">${esc(w.hanviet)}</span>` : "", esc(w.pos || "")].filter(Boolean).join(" · ")}</div>` : ""}
       <div class="vi">${esc(w.vietnamese)}</div>
       ${w.example_ko ? `<div class="ex${sentence ? " focus" : ""}"><div class="k">${esc(w.example_ko)}</div><div>${esc(w.example_vi)}</div></div>` : ""}
     </div>

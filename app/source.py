@@ -27,6 +27,8 @@ class HanSongSource:
         self._client: httpx.Client | None = None
         self._lock = threading.RLock()
         self._cache: dict[str, tuple[float, list[dict]]] = {}
+        self._file_locks: dict[str, threading.Lock] = {}
+        self._file_locks_guard = threading.Lock()
         self.last_error = ""
 
     # ------------------------------------------------------------ http
@@ -87,12 +89,19 @@ class HanSongSource:
         p = os.path.join(d, f"{part}.mp3")
         if os.path.exists(p):
             return p
-        r = self._get(f"/api/audio/{int(wid)}/{part}.mp3")
-        os.makedirs(d, exist_ok=True)
-        tmp = p + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(r.content)
-        os.replace(tmp, p)
+        # Tải sẵn ở nền và overlay có thể cùng xin một file. Mỗi file một khoá để chỉ một luồng ghi
+        # (trên Windows, hai luồng cùng os.replace vào một file sẽ bị PermissionError).
+        with self._file_locks_guard:
+            lock = self._file_locks.setdefault(p, threading.Lock())
+        with lock:
+            if os.path.exists(p):
+                return p
+            r = self._get(f"/api/audio/{int(wid)}/{part}.mp3")
+            os.makedirs(d, exist_ok=True)
+            tmp = p + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(r.content)
+            os.replace(tmp, p)
         return p
 
     def prefetch(self, wid: int):

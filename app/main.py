@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import db, live
+from . import ai, db, live
 from .source import HanSongSource, SourceError
 from .tiktok import TikTokConnector
 
@@ -64,15 +64,38 @@ def picker(recent: set, cfg: dict):
         words = source().words(cfg["source"])
     except SourceError:
         return None
-    fresh = [w for w in words if w["id"] not in recent] or words
-    if len(words) < 2:
-        return None
-    word = random.choice(fresh)
-    pool = random.sample(words, min(len(words), 40))
-    q = live.build_question(word, pool, cfg["mode"])
+    q = live.make_question(cfg["mode"], words, recent, live.load_items(words))
     if q:   # tải sẵn âm thanh câu này ở nền
-        threading.Thread(target=source().prefetch, args=(word["id"],), daemon=True).start()
+        threading.Thread(target=source().prefetch, args=(q["word_id"],), daemon=True).start()
     return q
+
+
+# ---------------------------------------------------------------- AI
+def ai_conf() -> dict:
+    return ai.DEFAULT_AI | (db.get_conf("ai") or {})
+
+
+def ai_key(provider: str) -> str:
+    if provider == "deepseek":
+        return db.get_conf("ai.deepseek_key") or os.environ.get("DEEPSEEK_API_KEY", "")
+    return db.get_conf("ai.openai_key") or os.environ.get("OPENAI_API_KEY", "")
+
+
+AI_JOB = {"running": False, "total": 0, "done": 0, "made": 0, "detail": ""}
+
+
+def run_ai_job(words: list[dict], cfg: dict, key: str):
+    def progress(n_words, n_items):
+        AI_JOB["done"] += n_words
+        AI_JOB["made"] = n_items
+    try:
+        rows = ai.generate_items(words, cfg, key, progress=progress)
+        live.save_items(rows, words)
+        AI_JOB["detail"] = f"Xong: tạo được {len(rows)} câu hỏi từ {len(words)} từ"
+    except Exception as e:  # lỗi AI/mạng: báo lên admin, không làm chết server
+        AI_JOB["detail"] = f"Lỗi: {e}"
+    finally:
+        AI_JOB["running"] = False
 
 
 GAME = live.LiveGame(picker)
@@ -155,6 +178,8 @@ def admin_state():
         "status": dict(STATUS),
         "overlay_path": f"/overlay?k={overlay_token()}",
         "game": GAME.state(),
+        "ai": {**ai_conf(), "has_openai_key": bool(ai_key("openai")), "has_deepseek_key": bool(ai_key("deepseek")),
+               "job": dict(AI_JOB), "counts": live.item_counts()},
     }
 
 
@@ -169,6 +194,9 @@ class ConfigReq(BaseModel):
     tiktok_username: str | None = None
     tiktok_sign_key: str | None = None
     game: dict | None = None
+    ai: dict | None = None             # provider, model_openai, model_deepseek, verify
+    openai_key: str | None = None
+    deepseek_key: str | None = None
 
 
 @app.put("/api/config")
@@ -190,7 +218,61 @@ def put_config(body: ConfigReq):
     if body.game is not None:
         GAME.configure(body.game)
         db.set_conf("game", GAME.cfg)
+    if body.ai is not None:
+        cur = ai_conf()
+        a = body.ai
+        if a.get("provider") in ("openai", "deepseek"):
+            cur["provider"] = a["provider"]
+        for k in ("model_openai", "model_deepseek"):
+            v = str(a.get(k) or "").strip()
+            if v:
+                if not re.match(r"^[\w.\-:/]{1,80}$", v):
+                    raise HTTPException(400, "Tên model không hợp lệ")
+                cur[k] = v
+        if "verify" in a:
+            cur["verify"] = a["verify"] in (True, 1, "1", "true", "on")
+        db.set_conf("ai", cur)
+    if body.openai_key:                  # để trống = giữ khoá cũ; khoá không bao giờ được trả về
+        db.set_conf("ai.openai_key", body.openai_key.strip())
+    if body.deepseek_key:
+        db.set_conf("ai.deepseek_key", body.deepseek_key.strip())
     return admin_state()
+
+
+class AIGenReq(BaseModel):
+    n: int = 30
+    redo: bool = False       # tạo lại cả những từ đã có nội dung
+
+
+@app.post("/api/ai/generate")
+def ai_generate(body: AIGenReq):
+    if AI_JOB["running"]:
+        raise HTTPException(400, "Đang tạo câu hỏi, chờ xong rồi bấm lại")
+    cfg = ai_conf()
+    key = ai_key(cfg["provider"])
+    if not key:
+        raise HTTPException(400, f"Chưa có API key cho {cfg['provider']}")
+    try:
+        words = source().words(GAME.cfg["source"])
+    except SourceError as e:
+        raise HTTPException(400, str(e))
+    have = live.load_items(words)
+    todo = [w for w in words if w.get("example_ko") and w.get("example_vi")
+            and (body.redo or w["id"] not in have["cloze"] or w["id"] not in have["trans"])]
+    random.shuffle(todo)
+    todo = todo[:max(1, min(300, body.n))]
+    if not todo:
+        raise HTTPException(400, "Mọi từ trong nguồn đã có câu hỏi AI. Tích 'tạo lại' nếu muốn làm mới.")
+    AI_JOB.update(running=True, total=len(todo), done=0, made=0, detail=f"Đang tạo cho {len(todo)} từ…")
+    threading.Thread(target=run_ai_job, args=(todo, cfg, key), daemon=True).start()
+    return dict(AI_JOB)
+
+
+@app.post("/api/ai/clear")
+def ai_clear():
+    with db.tx() as c:
+        c.execute("DELETE FROM live_items")
+    return {"ok": True}
 
 
 @app.post("/api/hansong/check")

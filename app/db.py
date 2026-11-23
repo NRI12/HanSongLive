@@ -30,6 +30,14 @@ CREATE TABLE IF NOT EXISTS live_weekly (
   diamonds INTEGER DEFAULT 0,
   PRIMARY KEY (week, user_id)
 );
+CREATE TABLE IF NOT EXISTS live_items (
+  word_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  korean TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (word_id, kind)
+);
 CREATE TABLE IF NOT EXISTS live_rounds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   at TEXT DEFAULT (datetime('now')),

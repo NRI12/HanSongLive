@@ -92,8 +92,9 @@ function renderQuestion(s) {
   const pct = s.duration ? Math.max(0, Math.min(100, (s.remaining / s.duration) * 100)) : 0;
   const counts = Q.counts;
   const total = counts ? Math.max(1, counts.reduce((a, b) => a + b, 0)) : 1;
-  const ask = Q.listen ? "Nghe và chọn nghĩa đúng" : Q.mode === "ko2vi" ? "Từ này nghĩa là gì?" : "Tiếng Hàn của từ này là gì?";
-  const optLang = Q.mode === "ko2vi" ? "vi" : "ko";
+  const ask = Q.listen ? "Nghe và chọn nghĩa đúng" : ASK[Q.mode] || "Chọn đáp án đúng";
+  const optLang = OPT_LANG[Q.mode] || "vi";
+  const sentence = Q.mode === "cloze" || Q.mode === "trans";
   const opts = Q.options.map((o, i) => {
     let cls = "opt " + optLang;
     if (reveal) cls += i === Q.answer ? " right" : " wrong";
@@ -107,13 +108,14 @@ function renderQuestion(s) {
     const hot = s.hot.length ? s.hot.map((p) => `<span class="hot">🔥 ${esc(p.name)} <b>${p.streak}</b></span>`).join("") : "";
     let body = `<div class="card ${Q.special ? "sp-" + Q.special : ""}">
       <div class="qhead"><span>Câu ${s.round + 1} · ${ask}</span>${badge(Q)}</div>
-      <div class="prompt ${Q.listen ? "listen" : Q.prompt_lang}">${esc(Q.prompt)}</div>
+      <div class="prompt ${Q.listen ? "listen" : Q.prompt_lang}${sentence ? " sent" : ""}">${promptHtml(Q)}</div>
       <div class="sub">${esc(Q.word.romanization || "")}</div>
+      ${Q.hint ? `<div class="hint">${Q.mode === "hanviet" ? "Nghĩa: " : "💬 "}${esc(Q.hint)}</div>` : ""}
       <div class="timer ${s.remaining < 5 ? "low" : ""}"><i style="width:${pct}%"></i></div>
       <div class="sub">⏱ ${Math.ceil(s.remaining)} giây${Q.extra ? ` <b class="extra">+${Q.extra}s nhờ quà</b>` : ""} · ${Q.answered} người đã trả lời</div>
     </div>
     ${sponsor}
-    <div class="opts">${opts}</div>`;
+    <div class="opts${Q.mode === "trans" ? " long" : ""}">${opts}</div>`;
     if (s.top.length || hot) body += `<div class="mini-top">${hot}${s.top.slice(0, 4).map((p, i) => `<span>${i + 1}. ${esc(p.name)} <b>${p.score}</b></span>`).join("")}</div>`;
     return body;
   }
@@ -123,13 +125,22 @@ function renderQuestion(s) {
       <div class="ko">${esc(w.korean)}</div>
       <div class="sub">${esc(w.romanization)}${w.hanviet ? ` · <span class="hv">${esc(w.hanviet)}</span>` : ""}${w.pos ? " · " + esc(w.pos) : ""}</div>
       <div class="vi">${esc(w.vietnamese)}</div>
-      ${w.example_ko ? `<div class="ex"><div class="k">${esc(w.example_ko)}</div><div>${esc(w.example_vi)}</div></div>` : ""}
+      ${w.example_ko ? `<div class="ex${sentence ? " focus" : ""}"><div class="k">${esc(w.example_ko)}</div><div>${esc(w.example_vi)}</div></div>` : ""}
     </div>
-    <div class="opts compact">${opts}</div>
+    <div class="opts compact${Q.mode === "trans" ? " long" : ""}">${opts}</div>
     <div class="reveal">
       ${r.fastest.length ? `<div class="fast">${r.fastest.map((f, i) => `<span>${["🥇", "🥈", "🥉"][i]} ${esc(f.name)} +${f.points}</span>`).join("")}</div>` : ""}
       <div class="stat">${r.correct}/${r.total} người trả lời đúng</div>
     </div>`;
+}
+
+const ASK = { ko2vi: "Từ này nghĩa là gì?", vi2ko: "Tiếng Hàn của từ này là gì?", cloze: "Điền vào chỗ trống",
+  trans: "Câu này nghĩa là gì?", hanviet: "Âm Hán Việt của từ này?" };
+const OPT_LANG = { ko2vi: "vi", vi2ko: "ko", cloze: "ko", trans: "vi", hanviet: "vi" };
+const BLANK = "＿＿＿";
+function promptHtml(Q) {
+  if (Q.mode !== "cloze") return esc(Q.prompt);
+  return esc(Q.prompt).replace(BLANK, `<span class="blank">${BLANK}</span>`);
 }
 
 function renderVote(v) {
@@ -195,6 +206,7 @@ function render(s) {
   const main = $("#main");
   $("#stage").dataset.phase = s.phase;
   $("#stage").dataset.special = (s.question && s.question.special) || "";
+  $("#stage").dataset.mode = (s.question && s.question.mode) || "";
   if ((s.phase === "question" || s.phase === "reveal") && s.question) main.innerHTML = renderQuestion(s);
   else if (s.phase === "board") main.innerHTML = renderBoard(s);
   else main.innerHTML = renderIdle(s);
@@ -217,8 +229,8 @@ function render(s) {
     const key = Q.id + ":" + s.phase + ":" + (s.phase === "question" ? Q.replay : 0);
     if (key !== last.sound) {
       last.sound = key;
-      if (s.phase === "question") play(`/audio/${Q.word_id}/${Q.prompt_lang === "ko" ? "ko_word" : "vi_word"}.mp3`);
-      else if (s.phase === "reveal") play(`/audio/${Q.word_id}/mix.mp3`);
+      if (s.phase === "question" && Q.audio_q) play(`/audio/${Q.word_id}/${Q.audio_q}.mp3`);
+      else if (s.phase === "reveal") play(`/audio/${Q.word_id}/${Q.audio_reveal || "mix"}.mp3`);
     }
   }
 }

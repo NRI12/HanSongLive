@@ -321,3 +321,101 @@ def test_api_queue_stats_weekly(client):
     assert any(r["name"] == "Vy" for r in live.weekly_top(5))
     c.post("/api/game", json={"action": "skip"})
     assert main.GAME.special == "boss"
+
+
+# ---------------------------------------------------------------- AI + dạng bài mới
+from app import ai
+
+AIW = [
+    {"id": 10, "korean": "기다리다", "vietnamese": "chờ, đợi", "hanviet": "", "pos": "động từ", "romanization": "gidarida",
+     "example_ko": "여기에서 기다리세요.", "example_vi": "Hãy đợi ở đây.", "level": 1},
+    {"id": 11, "korean": "학교", "vietnamese": "trường học", "hanviet": "học hiệu", "pos": "danh từ", "romanization": "hakgyo",
+     "example_ko": "학교에 가요.", "example_vi": "Tôi đi học.", "level": 1},
+]
+
+
+def fake_chat(calls):
+    def chat(provider, model, key, system, user):
+        calls.append((provider, model, key, "Kiểm tra" in user))
+        return {"items": [
+            {"id": 10, "cloze": {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요", "기다리세요"]},
+             "trans_wrong": ["Hãy ngồi ở đây.", "Đừng đợi ở đây.", "Tôi đã đợi ở đó.", "Hãy đợi ở đây."]},
+            {"id": 11, "cloze": {"answer": "학원", "distractors": ["a", "b", "c"]},          # answer không nằm trong câu
+             "trans_wrong": ["Tôi về nhà.", "학교"]},                                       # thiếu, có chữ Hàn
+            {"id": 99, "cloze": {"answer": "x"}},                                          # id lạ
+        ]}
+    return chat
+
+
+def test_ai_generate_items_validates_output():
+    calls = []
+    cfg = dict(ai.DEFAULT_AI, provider="openai", verify=True)
+    rows = ai.generate_items(AIW, cfg, "sk-test", chat=fake_chat(calls))
+    assert [(p, m, k) for p, m, k, _ in calls] == [("openai", "gpt-5.5", "sk-test")] * 2
+    assert calls[1][3]                                        # lượt 2 là kiểm duyệt
+    got = {(w, k): d for w, k, d in rows}
+    assert set(got) == {(10, "cloze"), (10, "trans")}         # từ 11 bị loại vì AI làm sai
+    assert got[(10, "cloze")] == {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요"]}
+    assert "Hãy đợi ở đây." not in got[(10, "trans")]["wrong"]  # trùng đáp án đúng bị bỏ
+
+
+def test_new_question_kinds():
+    cz = live.build_cloze(AIW[0], {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요"]})
+    assert cz["prompt"] == "여기에서 ＿＿＿." and cz["options"][cz["answer"]] == "기다리세요"
+    assert cz["hint"] == "Hãy đợi ở đây." and cz["audio_reveal"] == "ko_ex" and cz["audio_q"] is None
+    tr = live.build_trans(AIW[0], {"wrong": ["a", "b", "c"]})
+    assert tr["prompt"] == "여기에서 기다리세요." and tr["options"][tr["answer"]] == "Hãy đợi ở đây." and tr["audio_q"] == "ko_ex"
+    pool = [dict(w, id=i, hanviet=h) for i, (w, h) in enumerate(zip(WORDS, ["học hiệu", "", "thủy", "thư", "thân cố"]), 1)]
+    hv = live.build_hanviet(pool[0], pool)
+    assert hv["options"][hv["answer"]] == "học hiệu" and set(hv["options"]) == {"học hiệu", "thủy", "thư", "thân cố"}
+    assert live.build_hanviet(pool[1], pool) is None            # từ thuần Hàn: không có âm Hán Việt
+    # mode cloze nhưng chưa có nội dung AI -> quay về kiểu cơ bản
+    assert live.make_question("cloze", WORDS, set(), {"cloze": {}, "trans": {}})["mode"] == "ko2vi"
+    items = {"cloze": {10: {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요"]}}, "trans": {}}
+    assert live.make_question("cloze", AIW, set(), items)["mode"] == "cloze"
+    kinds = {live.make_question("all", AIW, set(), items)["mode"] for _ in range(60)}
+    assert kinds == {"ko2vi", "vi2ko", "cloze"}                 # hanviet thiếu 4 âm khác nhau, trans chưa có
+
+
+def test_cloze_round_hides_romanization():
+    items = {"cloze": {10: {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요"]}}, "trans": {}}
+    g = live.LiveGame(lambda recent, cfg: live.make_question("cloze", AIW, recent, items), clock=Clock(), persist=False)
+    g.configure({"boss_every": 0, "listen_every": 0})
+    g.start()
+    q = g.state()["question"]
+    assert q["mode"] == "cloze" and q["word"]["romanization"] == "" and q["hint"] == "Hãy đợi ở đây."
+    g.handle(C("an", "기다리세요"))                              # gõ thẳng đáp án tiếng Hàn
+    assert g.answers["an"]["correct"]
+
+
+def test_api_ai_flow(client, monkeypatch):
+    c = client
+    c.put("/api/config", json={"hansong_url": "http://hansong.test", "hansong_password": "pw"})
+    assert c.post("/api/ai/generate", json={"n": 5}).status_code == 400            # chưa có key
+    c.put("/api/config", json={"openai_key": "sk-secret-123", "ai": {"provider": "openai", "model_openai": "gpt-x",
+                                                                      "verify": False}}).raise_for_status()
+    assert c.put("/api/config", json={"ai": {"model_openai": "bad model!"}}).status_code == 400
+    a = c.get("/api/admin").json()["ai"]
+    assert a["has_openai_key"] and a["model_openai"] == "gpt-x" and not a["verify"]
+    assert "sk-secret-123" not in c.get("/api/admin").text
+
+    def chat(provider, model, key, system, user):
+        assert key == "sk-secret-123" and model == "gpt-x"
+        import json as _j
+        ws = _j.loads(user.split("Dữ liệu:\n", 1)[1])
+        return {"items": [{"id": w["id"], "cloze": {"answer": w["example_ko"].split()[0],
+                                                   "distractors": ["가요", "봐요", "와요"]},
+                           "trans_wrong": ["Sai một.", "Sai hai.", "Sai ba."]} for w in ws]}
+    monkeypatch.setattr(ai, "_chat", chat)
+    monkeypatch.setattr(ai.generate_items, "__defaults__", (chat, None))
+    c.post("/api/ai/clear")
+    c.post("/api/ai/generate", json={"n": 5}).raise_for_status()
+    for _ in range(50):
+        if not main.AI_JOB["running"]:
+            break
+        import time as _t; _t.sleep(0.05)
+    assert main.AI_JOB["detail"].startswith("Xong"), main.AI_JOB["detail"]
+    assert c.get("/api/admin").json()["ai"]["counts"] == {"cloze": 5, "trans": 5}
+    q = main.picker(set(), dict(live.DEFAULT_CONFIG, mode="trans"))
+    assert q["mode"] == "trans" and "Sai một." in q["options"]
+    assert c.post("/api/ai/generate", json={"n": 5}).status_code == 400            # mọi từ đã có

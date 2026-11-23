@@ -11,7 +11,7 @@ import httpx
 
 from . import db
 
-AUDIO_PARTS = ("ko_word", "vi_word", "mix")
+AUDIO_PARTS = ("ko_word", "vi_word", "mix", "ko_ex", "vi_ex")
 SOURCES = ("all", "today", "due", "hard", "new", "mastered", "random")
 
 

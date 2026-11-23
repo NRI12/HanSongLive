@@ -4,7 +4,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const PHASE = { idle: "Đang dừng", question: "Đang hỏi", reveal: "Hiện đáp án", board: "Bảng xếp hạng" };
 const MOCK_NAMES = ["Minh Anh", "Tuấn", "Hà Linh", "Bảo", "Thu Trang", "Khoa", "Ngọc", "Duy", "Mai", "Phúc", "Lan", "Quân"];
 const SPECIAL = { boss: "👹 boss", listen: "🎧 nghe" };
-const KIND = { ko2vi: "Hàn → Việt", vi2ko: "Việt → Hàn", listen: "🎧 Nghe", boss: "👹 Boss" };
+const KIND = { ko2vi: "Hàn → Việt", vi2ko: "Việt → Hàn", listen: "🎧 Nghe", boss: "👹 Boss", cloze: "🧩 Điền chỗ trống", trans: "📝 Dịch câu", hanviet: "🈶 Hán Việt" };
 let formLoaded = false;
 
 function toast(m, ms = 2500) { const t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), ms); }
@@ -41,6 +41,11 @@ function render(s) {
     ${g.vote_mode ? ` · khán giả chọn: ${KIND[g.vote_mode]}` : ""}
     ${Q ? `<br>Câu hiện tại${Q.special ? " (" + SPECIAL[Q.special] + ")" : ""}: <b>${esc(Q.prompt)}</b> · ${Q.answered} trả lời${Q.answer != null ? ` · đáp án ${"ABCD"[Q.answer]}: ${esc(Q.options[Q.answer])}` : ""}` : ""}
     ${g.message ? `<br><span class="err">${esc(g.message)}</span>` : ""}`;
+  const A = s.ai, J = A.job;
+  $("#aiInfo").innerHTML = `Đã có: 🧩 ${A.counts.cloze || 0} câu điền chỗ trống · 📝 ${A.counts.trans || 0} câu dịch ·
+    key: DeepSeek ${A.has_deepseek_key ? "✅" : "❌"} · OpenAI ${A.has_openai_key ? "✅" : "❌"}
+    ${J.running ? `<br><b style="color:var(--warn)">⏳ ${J.done}/${J.total} từ · đã tạo ${J.made} câu</b>` : J.detail ? `<br>${esc(J.detail)}` : ""}`;
+  $("#aiGen").disabled = J.running;
   $("#adminTop").innerHTML = g.top.map((p) => `<li>${esc(p.name)} <b>${p.score}</b></li>`).join("");
   $("#overlayUrl").value = location.origin + s.overlay_path;
   $("#openUrl").href = s.overlay_path;
@@ -52,6 +57,10 @@ function render(s) {
     $("#hsPw").placeholder = s.hansong.has_password ? "đã lưu · để trống = giữ nguyên" : "chưa đặt";
     const f = $("#gameCfg");
     for (const [k, v] of Object.entries(g.config)) if (f.elements[k]) f.elements[k].value = v;
+    $("#aiProvider").value = A.provider; $("#aiModelDs").value = A.model_deepseek; $("#aiModelOa").value = A.model_openai;
+    $("#aiVerify").value = A.verify ? "1" : "0";
+    $("#aiDsKey").placeholder = A.has_deepseek_key ? "đã lưu · để trống = giữ nguyên" : "chưa có khoá";
+    $("#aiOaKey").placeholder = A.has_openai_key ? "đã lưu · để trống = giữ nguyên" : "chưa có khoá";
   }
 }
 
@@ -117,4 +126,19 @@ $("#loadStats").addEventListener("click", run(async () => {
     <b>20 câu gần nhất</b>
     <table class="tbl">${row(["Lúc", "Kiểu", "Trả lời", "Đúng", "Comment", "Người xem"], "th")}
     ${st.recent.map((r) => row([r.at.slice(11, 16), KIND[r.special || r.mode] || r.mode, r.answered, r.correct, r.comments, r.viewers])).join("")}</table>`;
+}));
+
+$("#aiSave").addEventListener("click", run(async () => {
+  await api("/api/config", "PUT", {
+    ai: { provider: $("#aiProvider").value, model_deepseek: $("#aiModelDs").value, model_openai: $("#aiModelOa").value, verify: $("#aiVerify").value },
+    deepseek_key: $("#aiDsKey").value || null, openai_key: $("#aiOaKey").value || null,
+  });
+  $("#aiDsKey").value = $("#aiOaKey").value = ""; formLoaded = false; toast("Đã lưu ✓");
+}));
+$("#aiGen").addEventListener("click", run(async () => {
+  await api("/api/ai/generate", "POST", { n: +$("#aiN").value || 30, redo: $("#aiRedo").checked }); refresh();
+}));
+$("#aiClear").addEventListener("click", run(async () => {
+  if (!confirm("Xoá hết câu hỏi AI đã tạo?")) return;
+  await api("/api/ai/clear", "POST"); refresh();
 }));

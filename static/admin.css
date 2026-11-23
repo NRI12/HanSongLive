@@ -39,3 +39,5 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 5px; }
 .tbl { width: 100%; border-collapse: collapse; margin: 6px 0 14px; font-size: 13px; color: var(--text); }
 .tbl th, .tbl td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--line); }
 .tbl th { color: var(--muted); font-weight: 600; }
+label.inline { display: inline-flex; align-items: center; gap: 6px; }
+.btn:disabled { opacity: .5; cursor: default; }

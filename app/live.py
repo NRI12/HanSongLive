@@ -10,6 +10,7 @@ Theo quy định TikTok: quà chỉ tạo hiệu ứng cố định cho cả ph�
   - quà rất lớn (>= gift_huge): tên người tặng hiện là "nhà tài trợ" của câu kế tiếp
   - tổng kim cương cả phòng đủ gift_goal: câu kế tiếp là câu boss
 """
+import json
 import random
 import re
 import threading
@@ -38,14 +39,16 @@ DEFAULT_CONFIG = {
     "vote": 1,             # bình chọn kiểu câu trong lúc hiện bảng xếp hạng
     "live_counts": 1,      # hiện số người chọn từng đáp án ngay trong lúc hỏi
     "source": "all",       # nguồn từ: all | today | due | hard | new | mastered
-    "mode": "mix",         # ko2vi (hiện tiếng Hàn, chọn nghĩa) | vi2ko | mix
+    "mode": "all",         # ko2vi | vi2ko | mix (2 kiểu trên) | cloze | trans | hanviet | all (trộn mọi kiểu đang có)
 }
 LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "board_every": (0, 50), "board_s": (4, 30),
           "like_goal": (0, 100000), "share_goal": (0, 10000), "gift_goal": (0, 1000000),
           "gift_big": (1, 1000000), "gift_huge": (1, 1000000), "boss_every": (0, 100), "listen_every": (0, 100),
           "teams": (0, 1), "vote": (0, 1), "live_counts": (0, 1)}
 SOURCES = ("all", "today", "due", "hard", "new", "mastered")
-MODES = ("ko2vi", "vi2ko", "mix")
+MODES = ("ko2vi", "vi2ko", "mix", "cloze", "trans", "hanviet", "all")
+KINDS = ("ko2vi", "vi2ko", "cloze", "trans", "hanviet")   # các kiểu câu thật sự
+BLANK = "＿＿＿"
 SPECIALS = ("boss", "listen")
 BOSS_MULT = 3
 EXTRA_S = 10           # quà lớn cộng thêm bao nhiêu giây
@@ -160,9 +163,102 @@ def build_question(word: dict, pool: list[dict], mode: str) -> dict | None:
         "answer_lang": "ko" if field == "korean" else "vi",
         "options": options,
         "answer": options.index(right),
-        "word": {k: word.get(k, "") for k in ("id", "korean", "romanization", "vietnamese", "hanviet", "pos",
-                                               "example_ko", "example_vi", "level")},
+        "word": _word(word),
     }
+
+
+def _word(word: dict) -> dict:
+    return {k: word.get(k, "") for k in ("id", "korean", "romanization", "vietnamese", "hanviet", "pos",
+                                         "example_ko", "example_vi", "level")}
+
+
+def _shuffled(right: str, wrong: list[str]) -> tuple[list[str], int]:
+    options = list(wrong[:3]) + [right]
+    random.shuffle(options)
+    return options, options.index(right)
+
+
+def build_hanviet(word: dict, pool: list[dict]) -> dict | None:
+    """Hiện từ tiếng Hàn, chọn âm Hán Việt. Không cần AI."""
+    right = (word.get("hanviet") or "").strip()
+    if not right:
+        return None
+    seen, wrong = {norm_vi(right)}, []
+    for p in pool:
+        h = (p.get("hanviet") or "").strip()
+        if h and p["id"] != word["id"] and norm_vi(h) not in seen:
+            seen.add(norm_vi(h))
+            wrong.append(h)
+        if len(wrong) == 3:
+            break
+    if len(wrong) < 3:
+        return None
+    options, ans = _shuffled(right, wrong)
+    return {"word_id": word["id"], "mode": "hanviet", "prompt": word["korean"], "prompt_lang": "ko",
+            "answer_lang": "vi", "options": options, "answer": ans, "hint": word.get("vietnamese", ""),
+            "audio_q": "ko_word", "word": _word(word)}
+
+
+def build_cloze(word: dict, item: dict) -> dict | None:
+    """Câu ví dụ bị khoét chỗ trống, chọn cụm tiếng Hàn đúng. item do AI tạo (ai.clean_cloze)."""
+    ex, ans = word.get("example_ko") or "", item.get("answer") or ""
+    if not ans or ans not in ex or len(item.get("distractors") or []) < 3:
+        return None
+    options, idx = _shuffled(ans, item["distractors"])
+    return {"word_id": word["id"], "mode": "cloze", "prompt": ex.replace(ans, BLANK, 1), "prompt_lang": "ko",
+            "answer_lang": "ko", "options": options, "answer": idx, "hint": word.get("example_vi", ""),
+            "audio_q": None, "audio_reveal": "ko_ex", "word": _word(word)}
+
+
+def build_trans(word: dict, item: dict) -> dict | None:
+    """Nghe + đọc câu tiếng Hàn, chọn bản dịch đúng. item do AI tạo (ai.clean_trans)."""
+    right = word.get("example_vi") or ""
+    if not right or not word.get("example_ko") or len(item.get("wrong") or []) < 3:
+        return None
+    options, idx = _shuffled(right, item["wrong"])
+    return {"word_id": word["id"], "mode": "trans", "prompt": word["example_ko"], "prompt_lang": "ko",
+            "answer_lang": "vi", "options": options, "answer": idx, "hint": "",
+            "audio_q": "ko_ex", "word": _word(word)}
+
+
+def make_question(mode: str, words: list[dict], recent: set, items: dict, pool_size=40) -> dict | None:
+    """Chọn từ + dựng câu hỏi theo mode. items = {"cloze": {word_id: data}, "trans": {...}} (nội dung AI).
+    mode mix/all: thử lần lượt các kiểu theo thứ tự ngẫu nhiên, kiểu nào thiếu dữ liệu thì bỏ qua."""
+    if len(words) < 2:
+        return None
+    if mode == "all":
+        order = random.sample(KINDS, len(KINDS))
+    elif mode == "mix":
+        order = random.sample(("ko2vi", "vi2ko"), 2)
+    else:
+        order = [mode]
+    for kind in order + ["ko2vi"]:          # thiếu dữ liệu thì quay về kiểu cơ bản
+        if kind in ("cloze", "trans"):
+            got = items.get(kind) or {}
+            cands = [w for w in words if w["id"] in got]
+        elif kind == "hanviet":
+            cands = [w for w in words if (w.get("hanviet") or "").strip()]
+        else:
+            cands = words
+        if not cands:
+            continue
+        fresh = [w for w in cands if w["id"] not in recent] or cands
+        word = random.choice(fresh)
+        if kind == "hanviet":
+            pool = random.sample(cands, len(cands))
+        else:
+            pool = random.sample(words, min(len(words), pool_size))
+        if kind == "cloze":
+            q = build_cloze(word, items["cloze"][word["id"]])
+        elif kind == "trans":
+            q = build_trans(word, items["trans"][word["id"]])
+        elif kind == "hanviet":
+            q = build_hanviet(word, pool)
+        else:
+            q = build_question(word, pool, kind)
+        if q:
+            return q
+    return None
 
 
 # ---------------------------------------------------------------- engine
@@ -599,9 +695,12 @@ class LiveGame:
                     "answered": len(self.answers),
                     "counts": counts if (reveal or cfg["live_counts"]) else None,
                     "answer": self.q["answer"] if reveal else None,
+                    "hint": self.q.get("hint", "") if not listen else "",
+                    "audio_q": self.q.get("audio_q", "ko_word" if self.q["prompt_lang"] == "ko" else "vi_word"),
+                    "audio_reveal": self.q.get("audio_reveal", "mix"),
                     "word": self.q["word"] if reveal else
                     {"romanization": self.q["word"]["romanization"]
-                     if self.q["prompt_lang"] == "ko" and not listen else "",
+                     if self.q["mode"] in ("ko2vi", "hanviet") and not listen else "",
                      "level": self.q["word"]["level"]},
                     "result": self.last_result if reveal else None,
                 }
@@ -651,6 +750,31 @@ class LiveGame:
             }
             out.update(boards or {})
             return out
+
+
+def save_items(rows: list[tuple[int, str, dict]], words: list[dict]):
+    """Lưu nội dung AI. Ghi kèm chữ Hàn của từ để biết nếu bên HanSong đổi từ ở id đó."""
+    kor = {w["id"]: w["korean"] for w in words}
+    with db.tx() as c:
+        for wid, kind, data in rows:
+            if wid in kor:
+                c.execute("INSERT INTO live_items(word_id,kind,korean,data) VALUES(?,?,?,?) "
+                          "ON CONFLICT(word_id,kind) DO UPDATE SET korean=excluded.korean, data=excluded.data, "
+                          "created_at=datetime('now')", (wid, kind, kor[wid], json.dumps(data, ensure_ascii=False)))
+
+
+def load_items(words: list[dict]) -> dict:
+    """{"cloze": {word_id: data}, "trans": {...}} chỉ gồm các từ còn tồn tại và chưa bị đổi chữ."""
+    kor = {w["id"]: w["korean"] for w in words}
+    out: dict = {"cloze": {}, "trans": {}}
+    for r in db.q("SELECT word_id, kind, korean, data FROM live_items"):
+        if kor.get(r["word_id"]) == r["korean"] and r["kind"] in out:
+            out[r["kind"]][r["word_id"]] = json.loads(r["data"])
+    return out
+
+
+def item_counts() -> dict:
+    return {r["kind"]: r["n"] for r in db.q("SELECT kind, COUNT(*) AS n FROM live_items GROUP BY kind")}
 
 
 def all_time_top(n=5) -> list[dict]:

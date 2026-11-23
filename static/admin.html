@@ -86,8 +86,12 @@
         <option value="all">Tất cả</option><option value="today">Hôm nay</option><option value="due">Đến hạn ôn</option>
         <option value="hard">Từ khó</option><option value="new">Chưa ôn</option><option value="mastered">Đã thuộc</option></select></label>
       <label>Kiểu câu hỏi<select name="mode">
-        <option value="mix">Trộn cả hai</option><option value="ko2vi">Hiện tiếng Hàn → chọn nghĩa Việt</option>
-        <option value="vi2ko">Hiện tiếng Việt → chọn từ Hàn</option></select></label>
+        <option value="all">Trộn mọi dạng (khuyên dùng)</option>
+        <option value="mix">Trộn Hàn → Việt và Việt → Hàn</option><option value="ko2vi">Hiện tiếng Hàn → chọn nghĩa Việt</option>
+        <option value="vi2ko">Hiện tiếng Việt → chọn từ Hàn</option>
+        <option value="cloze">🧩 Điền chỗ trống trong câu (cần AI)</option>
+        <option value="trans">📝 Dịch câu ví dụ (cần AI)</option>
+        <option value="hanviet">🈶 Đoán âm Hán Việt</option></select></label>
       <label>Thời gian trả lời (giây)<input type="number" name="question_s" min="8" max="120"></label>
       <label>Thời gian hiện đáp án (giây)<input type="number" name="reveal_s" min="3" max="30"></label>
       <label>Hiện bảng xếp hạng sau mỗi N câu (0 = tắt)<input type="number" name="board_every" min="0" max="50"></label>
@@ -104,6 +108,28 @@
       <label>Hiện tỉ lệ A/B/C/D trong lúc hỏi<select name="live_counts"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <div class="row end"><button class="btn primary">💾 Lưu cài đặt</button></div>
     </form>
+  </section>
+
+  <section class="card">
+    <h3>🤖 AI tạo câu hỏi</h3>
+    <div id="aiInfo" class="muted">…</div>
+    <div class="grid">
+      <label>Nhà cung cấp<select id="aiProvider"><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option></select></label>
+      <label>Model DeepSeek<input id="aiModelDs"></label>
+      <label>Model OpenAI<input id="aiModelOa"></label>
+      <label>Kiểm duyệt lần 2 (chính xác hơn, tốn gấp đôi)<select id="aiVerify"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>DeepSeek API key<input id="aiDsKey" type="password" placeholder="để trống = giữ khoá cũ"></label>
+      <label>OpenAI API key<input id="aiOaKey" type="password" placeholder="để trống = giữ khoá cũ"></label>
+    </div>
+    <div class="row">
+      <button class="btn" id="aiSave">💾 Lưu</button>
+      <label class="inline">Số từ<input id="aiN" type="number" value="30" min="1" max="300" style="width:80px"></label>
+      <label class="inline"><input id="aiRedo" type="checkbox"> tạo lại cả từ đã có</label>
+      <button class="btn primary" id="aiGen">✨ Tạo câu hỏi</button>
+      <button class="btn danger" id="aiClear">🗑 Xoá hết</button>
+    </div>
+    <p class="muted">AI đọc câu ví dụ của từng từ (lấy từ nguồn từ đang chọn) để tạo đáp án nhiễu cho dạng <b>điền chỗ trống</b> và <b>dịch câu</b>.
+      Âm thanh dùng luôn bản đọc câu ví dụ bên HanSong, không tốn thêm TTS. Mục AI làm sai sẽ tự bị loại.</p>
   </section>
 
   <section class="card">

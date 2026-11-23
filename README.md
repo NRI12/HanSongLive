@@ -27,6 +27,12 @@ Cách làm giống tu-tien-online: kết nối TikTok → chuẩn hoá sự ki�
 - Banner cuối màn hình thay đổi mỗi 6 giây để hướng dẫn người mới vào phòng.
 - Trong admin có nút để đặt trước câu boss, câu nghe hoặc x2 cho câu kế tiếp, và bảng **Thống kê theo câu**
   (số người trả lời, số comment, người xem, tỉ lệ đúng theo từng kiểu câu).
+- **Các dạng câu** (chọn trong admin, mặc định trộn tất cả):
+  - Hàn → Việt, Việt → Hàn (dạng cũ).
+  - 🧩 **Điền chỗ trống**: câu ví dụ bị khoét đúng từ đang hỏi (đã chia đuôi), có kèm bản dịch làm gợi ý, chọn 1 trong 4 cụm tiếng Hàn.
+  - 📝 **Dịch câu**: đọc câu ví dụ tiếng Hàn, chọn bản dịch đúng trong 4 câu.
+  - 🈶 **Âm Hán Việt**: chọn âm Hán Việt của từ (chỉ dùng từ Hán Hàn).
+  - Đáp án nhiễu của 2 dạng 🧩 và 📝 do AI (DeepSeek hoặc OpenAI) tạo sẵn ở mục **🤖 AI tạo câu hỏi** trong admin. Âm thanh dùng luôn bản đọc câu ví dụ bên HanSong.
 - Gõ `điểm` hoặc `top` để xem điểm và hạng của mình.
 
 ## Chạy

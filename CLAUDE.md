@@ -31,6 +31,13 @@ Trò chơi đoán từ tiếng Hàn trên TikTok LIVE. Người xem comment A/B/
 - Chữ trên giao diện viết bằng tiếng Việt.
 - Đổi bố cục overlay thì phải chụp lại khung 540×960 ở các màn: câu hỏi, đáp án, bảng xếp hạng (cả khi có và không có bình chọn), câu boss, câu nghe, thông báo quà. Kiểm tra không bị tràn khi có 12 người chơi trở lên và khi tên dài (feed, top, thông báo đều cắt bằng dấu …).
 
+## Chạy thật (phát live)
+- Cấu hình: `cp .env.example .env`, điền `LIVE_PASSWORD`, `LIVE_SECRET` (`openssl rand -hex 32`), `HANSONG_URL`, `HANSONG_PASSWORD` của HanSong thật. Sau đó chạy `set -a; . ./.env; set +a` rồi khởi động uvicorn, hoặc dùng `docker compose up -d --build`. Nếu chạy trên VPS sau HTTPS thì thêm `COOKIE_SECURE=1`.
+- Trước khi lên sóng: vào `/admin`, bấm **Kiểm tra kết nối** HanSong (số từ phải lớn hơn 0). Sau đó bật **Chế độ thử**, bấm **Bắt đầu** và thử các nút giả lập.
+- Overlay: chép link trong admin vào TikTok LIVE Studio (Liên kết/Trình duyệt) hoặc OBS Browser Source, kích thước 1080×1920. Với OBS thì tích "Control audio via OBS". Thêm `&bg=0` nếu muốn nền trong suốt.
+- Thứ tự lên sóng: phát LIVE trên TikTok trước (app chỉ kết nối được khi tài khoản đang live). Sau đó trong admin nhập tài khoản, bấm **Kết nối TikTok**, chờ trạng thái "đã kết nối" rồi mới bấm **Bắt đầu**. Nếu bị chặn thì dán khoá ký Euler (eulerstream.com).
+- Buổi live đầu tiên: dùng tài khoản phụ, nhờ người tặng một món quà từ 5💎 trở lên, rồi kiểm tra bằng `sqlite3 data/live.db "select name,gifts,diamonds from live_players order by updated_at desc limit 5"`. Nếu `diamonds` bằng `gifts` thì SDK không gửi `diamond_count`, cần sửa `normalize()` trong `app/tiktok.py`.
+
 ## Chạy thử end-to-end ở local
 - Không có dữ liệu HanSong thật ở local. Muốn thử thì tạo một HanSong tạm có `DATA_DIR` trỏ vào thư mục tạm, chèn từ vào DB và dùng âm `ffmpeg sine` làm âm thanh giả, rồi chạy HanSong ở cổng 8000 với `APP_PASSWORD`.
 - Có thể dùng một HanSong giả nhỏ (FastAPI phục vụ `/api/login`, `/api/words`, `/api/audio/...`) đặt trong scratchpad thay cho HanSong thật.

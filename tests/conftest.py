@@ -1,4 +1,7 @@
 import os, sys, tempfile
 os.environ["DATA_DIR"] = tempfile.mkdtemp(prefix="hansonglive-test-")
-os.environ.pop("LIVE_PASSWORD", None)
+# Test không bao giờ dùng cấu hình thật, kể cả khi shell đã `. ./.env` (key AI thật sẽ gọi API tốn tiền).
+for _k in ("LIVE_PASSWORD", "LIVE_SECRET", "HANSONG_URL", "HANSONG_PASSWORD", "TIKTOK_USERNAME", "TIKTOK_SIGN_API_KEY",
+           "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "COOKIE_SECURE"):
+    os.environ.pop(_k, None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))

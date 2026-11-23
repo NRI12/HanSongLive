@@ -11,7 +11,7 @@ Trò chơi đoán từ tiếng Hàn trên TikTok LIVE. Người xem comment A/B/
 ## Stack, lệnh
 - Python 3.12, FastAPI, SQLite (`data/live.db`), thư viện `TikTokLive==7.0.1`. Frontend dùng JS thuần, không có bước build.
 - Cài: `uv venv -p 3.12 .venv && uv pip install -p .venv -r requirements-dev.txt`
-- Test: `.venv/bin/python -m pytest -q tests` (không cần mạng, HanSong và TikTok đều được giả lập)
+- Test: `.venv/bin/python -m pytest -q tests` (không cần mạng, HanSong và TikTok đều được giả lập). `tests/conftest.py` xoá mọi biến bí mật trong env, vì nếu chạy test trong shell đã `. ./.env` thì key AI thật lọt vào test, test có thể gọi API tốn tiền và `test_api_ai_flow` sẽ lỗi.
 - Chạy: `.venv/bin/uvicorn app.main:app --port 8100`. Trang: `/admin` và `/overlay?k=<token>`.
 
 ## Kiến trúc
@@ -53,6 +53,6 @@ Trò chơi đoán từ tiếng Hàn trên TikTok LIVE. Người xem comment A/B/
 - Tắt server bằng `fuser -k 8100/tcp`, **không dùng** `pkill -f "port 8100"` vì lệnh này khớp với chính shell đang chạy và tắt luôn nó.
 
 ## Trạng thái
-- Đã xong: engine, admin, overlay, chế độ thử, proxy và cache âm thanh, xác thực, Docker. Đợt nâng cấp tương tác đã xong: tỉ lệ đáp án trực tiếp, quà chia mức, mốc quà và chia sẻ, câu boss, câu nghe, đội, bình chọn, chuỗi đúng, Vua tuần và Fan cứng, banner hướng dẫn, nút đặt trước vòng đặc biệt, thống kê theo câu. Đã chép AI từ HanSong, thêm 3 dạng câu (điền chỗ trống, dịch câu, Hán Việt). Đã chạy thử AI thật (DeepSeek, có kiểm duyệt) với 12 từ: tạo được 24/24 câu và chất lượng tốt. Đã thêm chế độ vùng an toàn, khung căn chỉnh và bot Hami (có thử AI thật: trả lời đúng, từ chối khéo câu hỏi xin số điện thoại). Đã thêm báo hết credit AI (thử với API DeepSeek thật bằng key sai: nhận đúng 401) và lời mời ủng hộ xen kẽ. Có 26 test, tất cả đều qua. Một lần chạy test bị lỗi đúng lúc máy đang tải nặng, chạy lại hơn 100 lần không tái hiện được; đã nới thời gian chờ job AI trong `test_api_ai_flow` từ 2,5 lên 10 giây.
+- Đã xong: engine, admin, overlay, chế độ thử, proxy và cache âm thanh, xác thực, Docker. Đợt nâng cấp tương tác đã xong: tỉ lệ đáp án trực tiếp, quà chia mức, mốc quà và chia sẻ, câu boss, câu nghe, đội, bình chọn, chuỗi đúng, Vua tuần và Fan cứng, banner hướng dẫn, nút đặt trước vòng đặc biệt, thống kê theo câu. Đã chép AI từ HanSong, thêm 3 dạng câu (điền chỗ trống, dịch câu, Hán Việt). Đã chạy thử AI thật (DeepSeek, có kiểm duyệt) với 12 từ: tạo được 24/24 câu và chất lượng tốt. Đã thêm chế độ vùng an toàn, khung căn chỉnh và bot Hami (có thử AI thật: trả lời đúng, từ chối khéo câu hỏi xin số điện thoại). Đã thêm báo hết credit AI (thử với API DeepSeek thật bằng key sai: nhận đúng 401) và lời mời ủng hộ xen kẽ. Có 26 test, tất cả đều qua.
 - Mã nguồn: git, remote `git@github.com:NRI12/HanSongLive.git` (private). Máy không có `gh`, SSH push được với tài khoản NRI12.
 - Chưa kiểm chứng: nhận comment và quà từ một phiên TikTok LIVE thật. Mới chỉ thử trường hợp tài khoản chưa live (app báo lỗi đúng và tự thử lại). Đặc biệt cần xác nhận `gift.diamond_count` có giá trị thật. Nếu không có thì mọi quà bị tính 1 kim cương/món và các mức `gift_big`/`gift_huge` sẽ không bao giờ đạt.

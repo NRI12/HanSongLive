@@ -4,6 +4,8 @@
   --ko-font: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
   /* mọi kích thước theo chiều rộng khung dọc 9:16 */
   --u: min(1vw, calc(100vh * 9 / 16 / 100));
+  --H: calc(var(--u) * 100 * 16 / 9);   /* chiều cao khung */
+  --st: 12; --sb: 62;                   /* vùng an toàn (%), đặt từ config */
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
@@ -172,3 +174,47 @@ body.transparent .stage { background: transparent; }
 @keyframes pop { from { opacity: 0; transform: scale(.6); } }
 @keyframes pulse { 50% { transform: scale(1.08); } }
 @keyframes in { from { opacity: 0; transform: translateY(8px); } }
+
+/* ---------------------------------------------------------------- vùng an toàn TikTok
+   Trên: tên host + số người xem (0 → --st%). Dưới: comment, banner quà, tim bay, ô nhập (--sb% → 100%).
+   Nội dung overlay chỉ nằm trong khoảng giữa. Bot ngồi góc phải bên dưới, bên phải cột comment. */
+.reserve { display: none; }
+body.safe .stage { padding-top: calc(var(--H) * var(--st) / 100); padding-bottom: 0; gap: calc(var(--u) * 1.8); }
+body.safe .reserve { display: block; flex: 0 0 calc(var(--H) * (100 - var(--sb)) / 100); }
+body.safe .bar, body.safe .feed, body.safe .mini-top, body.safe .sponsor { display: none; }
+body.safe .help { flex: 0 0 calc(var(--u) * 9); min-height: 0; display: block; padding-top: calc(var(--u) * 1.5);
+  font-size: .74em; line-height: 1.35; overflow: hidden; transition: opacity .25s; }
+body.safe.bot-talking .help { opacity: 0; }
+body.safe .card { padding: calc(var(--u) * 3) calc(var(--u) * 3.5); }
+body.safe .prompt { margin: calc(var(--u) * 1.2) 0 calc(var(--u) * .5); }
+body.safe .prompt.ko { font-size: calc(var(--u) * 12); }
+body.safe .goals { gap: calc(var(--u) * 1.2); }
+body.safe .goal { font-size: .66em; }
+.goal.team { background: #2d5bd8; } .goal.team i { background: #d83a4a !important; }
+body.safe .idle { gap: .5em; } body.safe .idle .ko { font-size: calc(var(--u) * 10); }
+body.safe .reveal .vi { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 1.2em; }
+body.safe .prompt.vi { font-size: calc(var(--u) * 8); }
+body.safe .prompt.sent { font-size: calc(var(--u) * 6.6); }
+body.safe .prompt.listen { font-size: calc(var(--u) * 14); }
+body.safe .timer { margin-top: calc(var(--u) * 1.6); }
+body.safe .opts { gap: calc(var(--u) * 1.6); }
+body.safe .opt { min-height: calc(var(--u) * 12.5); padding-top: calc(var(--u) * 1.6); padding-bottom: calc(var(--u) * 1.6); }
+body.safe .opts.long .opt { min-height: calc(var(--u) * 7.6); padding-top: calc(var(--u) * .8); padding-bottom: calc(var(--u) * .8); font-size: .8em; }
+body.safe .opts.long { gap: calc(var(--u) * 1.2); }
+body.safe .reveal .ko { font-size: calc(var(--u) * 10); margin-top: 0; }
+body.safe .reveal .ex { margin-top: calc(var(--u) * 1.4); padding: calc(var(--u) * 1.8); }
+body.safe .board-title { margin-bottom: calc(var(--u) * 1); font-size: 1.1em; }
+body.safe .big .top li { font-size: .95em; padding: .25em .9em; }
+/* đáp án ở chế độ an toàn: 1 dòng kết quả thay cho 4 ô */
+.result-line { display: flex; flex-wrap: nowrap; overflow: hidden; font-size: .88em; white-space: nowrap; gap: calc(var(--u) * 1.5); justify-content: center; align-items: center; font-weight: 700; }
+.result-line .ok { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex-shrink: 1; background: #1f4a34; border: 2px solid var(--good); border-radius: 99px; padding: .25em .9em; }
+.result-line .ok b { color: var(--good); }
+.result-line .st { color: var(--muted); }
+.result-line .fast span { padding: .15em .7em; }
+
+/* khung căn chỉnh (&guide=1): ước lượng vị trí giao diện TikTok LIVE trên màn hình người xem */
+.guide { position: absolute; inset: 0; z-index: 30; pointer-events: none; font-size: calc(var(--u) * 3); font-weight: 800; }
+.guide .z { position: absolute; background: #ff2d5540; border: 2px dashed #ff2d55; color: #fff; display: flex;
+  align-items: center; justify-content: center; text-align: center; text-shadow: 0 0 4px #000; padding: .3em; }
+.guide .z.soft { background: #ffd16630; border-color: #ffd166; }
+.guide .line { position: absolute; left: 0; right: 0; border-top: 3px solid #6fdc9b; color: #6fdc9b; text-shadow: 0 0 4px #000; padding-left: .5em; }

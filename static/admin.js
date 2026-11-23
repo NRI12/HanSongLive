@@ -49,6 +49,7 @@ function render(s) {
   $("#adminTop").innerHTML = g.top.map((p) => `<li>${esc(p.name)} <b>${p.score}</b></li>`).join("");
   $("#overlayUrl").value = location.origin + s.overlay_path;
   $("#openUrl").href = s.overlay_path;
+  $("#guideUrl").href = s.overlay_path + "&guide=1";
   if (!formLoaded) {
     formLoaded = true;
     $("#ttUser").value = s.tiktok.username;

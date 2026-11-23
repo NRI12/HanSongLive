@@ -65,6 +65,7 @@ function tips() {
   if (cfg.boss_every) t.push(`👹 Cứ ${cfg.boss_every} câu có 1 <b>CÂU BOSS</b> x3 điểm`);
   if (cfg.listen_every) t.push(`🎧 Cứ ${cfg.listen_every} câu có 1 <b>câu nghe</b>: chỉ nghe, không nhìn chữ`);
   if (cfg.vote && cfg.board_every) t.push("🗳 Lúc hiện bảng xếp hạng: comment <b>1 / 2 / 3</b> để chọn kiểu câu tiếp theo");
+  if (cfg.bot && cfg.bot_ai) t.push("🐰 Gõ <b>bot ơi …</b> để hỏi Hami về tiếng Hàn");
   t.push("➕ Theo dõi kênh để không bỏ lỡ buổi học tiếng Hàn sau nhé!");
   return t;
 }
@@ -133,11 +134,19 @@ function renderQuestion(s) {
       <div class="vi">${esc(w.vietnamese)}</div>
       ${w.example_ko ? `<div class="ex${sentence ? " focus" : ""}"><div class="k">${esc(w.example_ko)}</div><div>${esc(w.example_vi)}</div></div>` : ""}
     </div>
-    <div class="opts compact${Q.mode === "trans" ? " long" : ""}">${opts}</div>
+    ${SAFE() ? resultLine(Q, r) : `<div class="opts compact${Q.mode === "trans" ? " long" : ""}">${opts}</div>
     <div class="reveal">
       ${r.fastest.length ? `<div class="fast">${r.fastest.map((f, i) => `<span>${["🥇", "🥈", "🥉"][i]} ${esc(f.name)} +${f.points}</span>`).join("")}</div>` : ""}
       <div class="stat">${r.correct}/${r.total} người trả lời đúng</div>
-    </div>`;
+    </div>`}`;
+}
+
+const SAFE = () => !!(cfg && cfg.safe);
+function resultLine(Q, r) {   // vùng an toàn chật: gộp đáp án + kết quả vào 1 dòng
+  const right = Q.options[Q.answer];
+  return `<div class="result-line"><span class="ok">✅ <b>${L[Q.answer]}</b> ${esc(right.length > 28 ? right.slice(0, 27) + "…" : right)}</span>
+    <span class="st">${r.correct}/${r.total} đúng</span>
+    ${r.fastest.length ? `<span class="fast"><span>🥇 ${esc(r.fastest[0].name)} +${r.fastest[0].points}</span></span>` : ""}</div>`;
 }
 
 const ASK = { ko2vi: "Từ này nghĩa là gì?", vi2ko: "Tiếng Hàn của từ này là gì?", cloze: "Điền vào chỗ trống",
@@ -158,6 +167,16 @@ function renderVote(v) {
 
 function renderBoard(s) {
   const rec = s.all_time[0];
+  if (SAFE()) {   // vùng an toàn: top 4 + (bình chọn hoặc vua tuần/fan)
+    return `<div class="card big">
+      <div class="board-title">🏆 Bảng xếp hạng sau ${s.round} câu</div>
+      <ol class="top">${topList(s.top.slice(0, s.vote ? 3 : 4))}</ol>
+    </div>
+    ${s.vote ? renderVote(s.vote) : `<div class="cols">
+      <div class="card"><div class="side-title">👑 Vua tuần</div><ol class="top">${topList(s.weekly.slice(0, 2))}</ol></div>
+      <div class="card"><div class="side-title">🎁 Cảm ơn quà</div><ol class="top">${topList(s.supporters.slice(0, 2), "diamonds", "💎")}</ol></div>
+    </div>`}`;
+  }
   const fan = s.weekly_fans[0];
   return `<div class="card big">
       <div class="board-title">🏆 Bảng xếp hạng sau ${s.round} câu</div>
@@ -173,6 +192,12 @@ function renderBoard(s) {
 }
 
 function renderIdle(s) {
+  if (SAFE()) return `<div class="idle card">
+      <div class="ko">한국어</div>
+      <div style="font-size:1.25em;font-weight:800">Đoán nghĩa từ tiếng Hàn</div>
+      <div class="sub">${esc(s.message && s.message !== "Tạm dừng" ? s.message : "Sắp bắt đầu, chờ chút nhé…")}</div>
+      <div>Comment <b>A / B / C / D</b> để trả lời${s.teams ? " · gõ <b>đội đỏ</b> / <b>đội xanh</b>" : ""}</div>
+    </div>`;
   return `<div class="idle card">
       <div class="ko">한국어</div>
       <div style="font-size:1.4em;font-weight:800">Đoán nghĩa từ tiếng Hàn</div>
@@ -189,11 +214,16 @@ function renderGoals(s) {
   else g("❤️", { progress: 0 }, String(s.likes));
   if (G.diamonds.goal) g("💎", s.next_special === "boss" ? { progress: 1 } : G.diamonds, s.next_special === "boss" ? "Sắp có BOSS!" : `${G.diamonds.value}/${G.diamonds.goal} → BOSS`);
   if (G.shares.goal) g("🔁", G.shares, `${G.shares.value}/${G.shares.goal} → x2`);
+  const t = s.teams;
+  if (SAFE() && t && (t.red.members || t.blue.members)) {   // vùng an toàn: điểm đội gộp vào cùng hàng
+    const r = t.red.score + t.blue.score ? (t.red.score / (t.red.score + t.blue.score)) * 100 : 50;
+    out.push(`<div class="goal team"><i style="width:${r}%"></i><span>🔴 ${t.red.score} · ${t.blue.score} 🔵</span></div>`);
+  }
   return out.join("");
 }
 
 function renderTeams(t) {
-  if (!t || (!t.red.members && !t.blue.members)) return "";
+  if (SAFE() || !t || (!t.red.members && !t.blue.members)) return "";
   const sum = Math.max(1, t.red.score + t.blue.score);
   const r = t.red.score || t.blue.score ? (t.red.score / sum) * 100 : 50;
   return `<div class="teams"><i style="width:${r}%"></i>
@@ -201,10 +231,49 @@ function renderTeams(t) {
     <span><small>(${t.blue.members})</small> <b>${t.blue.score}</b> Xanh 🔵</span></div>`;
 }
 
+/* ---------------------------------------------------------------- bot + khung căn chỉnh */
+let botSeq = -1;
+Hami.mount($("#hami"), $("#hamiBubble"));
+snd.addEventListener("play", () => Hami.speaking(true));
+["pause", "ended", "error"].forEach((e) => snd.addEventListener(e, () => Hami.speaking(false)));
+
+function renderBot(b) {
+  $("#hami").classList.toggle("hidden", !b);
+  if (!b) { $("#hamiBubble").classList.remove("show"); return; }
+  Hami.base(b.mood);
+  const fresh = botSeq >= 0;
+  for (const l of b.lines) {
+    if (l.seq <= botSeq) continue;
+    botSeq = l.seq;
+    if (fresh) Hami.say(l.text, l.mood);        // vừa mở overlay: không nói lại câu cũ
+  }
+  if (botSeq < 0) botSeq = 0;
+}
+
+function renderGuide() {
+  if (params.get("guide") !== "1") return;
+  const z = (t, l, w, h, label, soft) => `<div class="z${soft ? " soft" : ""}" style="top:${t}%;left:${l}%;width:${w}%;height:${h}%">${label}</div>`;
+  $("#guide").innerHTML =
+    z(0, 0, 100, 10, "TikTok: tên host · người xem · nút đóng") +
+    z(10, 0, 45, 4, "Xếp hạng / sự kiện", true) +
+    z(54, 0, 64, 7, "Banner quà TikTok", true) +
+    z(62, 0, 74, 27, "Bình luận TikTok") +
+    z(64, 84, 16, 25, "Tim bay", true) +
+    z(90, 0, 100, 10, "Ô nhập · nút quà · chia sẻ") +
+    `<div class="line" style="top:${cfg.safe_top}%">▲ safe_top ${cfg.safe_top}%</div>` +
+    `<div class="line" style="top:${cfg.safe_bottom}%">▼ safe_bottom ${cfg.safe_bottom}%</div>`;
+  $("#guide").classList.remove("hidden");
+}
+
 function render(s) {
   const first = cfg === null;
   cfg = s.config;
   if (first) rotateTip();
+  document.body.classList.toggle("safe", !!cfg.safe);
+  document.documentElement.style.setProperty("--st", cfg.safe_top);
+  document.documentElement.style.setProperty("--sb", cfg.safe_bottom);
+  renderGuide();
+  renderBot(s.bot);
   $("#viewers").textContent = "👀 " + s.viewers;
   $("#players").textContent = "🙋 " + s.players;
   $("#goals").innerHTML = renderGoals(s);

@@ -1,0 +1,82 @@
+/* Bot Hami: vị trí + animation. Kích thước theo --u (1% chiều rộng khung 9:16). */
+.hami { position: absolute; z-index: 4; width: calc(var(--u) * 23); height: calc(var(--u) * 26.5); pointer-events: none;
+  right: calc(var(--u) * 2); }
+/* chế độ vùng an toàn: góc phải ngay dưới vùng nội dung, bên phải cột comment TikTok */
+body.safe .hami { top: calc(var(--H) * var(--sb) / 100 + var(--u) * 1.5); }
+body:not(.safe) .hami { bottom: calc(var(--u) * 13); }
+.hami-svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 calc(var(--u) * .6) calc(var(--u) * 1.2) #0007); }
+.hami .h-all, .hami .h-body, .hami .h-ear, .hami .h-arm, .hami .h-eye { transform-box: fill-box; }
+.hami .h-all { transform-origin: 50% 100%; animation: h-breathe 3.2s ease-in-out infinite; }
+.hami .h-ear-l { transform-origin: 70% 95%; } .hami .h-ear-r { transform-origin: 30% 95%; }
+.hami .h-arm-l { transform-origin: 80% 20%; } .hami .h-arm-r { transform-origin: 20% 20%; }
+.hami .h-eye { transform-origin: 50% 50%; animation: h-blink 4.6s infinite; }
+
+/* mặt: mặc định mắt mở + cười */
+.hami .h-eyes > g, .hami .h-mouth > *, .hami .h-tear, .hami .h-sweat { display: none; }
+.hami .h-eyes-open, .hami .m-smile { display: inline; }
+.hami.talking .m-smile, .hami.speaking .m-smile { animation: h-mouth-a .26s steps(1) infinite; display: inline; }
+.hami.talking .m-open, .hami.speaking .m-open { animation: h-mouth-b .26s steps(1) infinite; display: inline; }
+
+.hami[data-mood="happy"] .h-eyes-open, .hami[data-mood="dance"] .h-eyes-open { display: none; }
+.hami[data-mood="happy"] .h-eyes-happy, .hami[data-mood="dance"] .h-eyes-happy { display: inline; }
+.hami[data-mood="happy"] .h-all { animation: h-hop .5s ease-in-out 4; }
+.hami[data-mood="dance"] .h-all { animation: h-dance .55s ease-in-out infinite; }
+.hami[data-mood="dance"] .h-arm-l { animation: h-arm-up .55s ease-in-out infinite; }
+.hami[data-mood="dance"] .h-arm-r { animation: h-arm-up-r .55s ease-in-out infinite; }
+
+.hami[data-mood="love"] .h-eyes-open { display: none; }
+.hami[data-mood="love"] .h-eyes-heart { display: inline; }
+.hami[data-mood="love"] .h-all { animation: h-hop .7s ease-in-out 3; }
+
+.hami[data-mood="wow"] .h-eye { animation: none; transform: scale(1.25); }
+.hami[data-mood="wow"] .m-smile { display: none !important; }
+.hami[data-mood="wow"] .m-o { display: inline; }
+.hami[data-mood="wow"] .h-ear { animation: h-ear-perk .4s ease-out 2 alternate; }
+
+.hami[data-mood="sad"] .m-smile { display: none !important; }
+.hami[data-mood="sad"] .m-sad, .hami[data-mood="sad"] .h-tear { display: inline; }
+.hami[data-mood="sad"] .h-ear-l { transform: rotate(-28deg); } .hami[data-mood="sad"] .h-ear-r { transform: rotate(28deg); }
+.hami[data-mood="sad"] .h-all { animation: h-breathe 4s ease-in-out infinite; }
+.hami .h-ear { transition: transform .4s; }
+
+.hami[data-mood="hurry"] .h-all { animation: h-shake .18s linear infinite; }
+.hami[data-mood="hurry"] .h-sweat { display: inline; }
+.hami[data-mood="hurry"] .m-smile { display: none !important; }
+.hami[data-mood="hurry"] .m-o { display: inline; }
+
+.hami[data-mood="wave"] .h-arm-r { animation: h-wave .4s ease-in-out 6 alternate; }
+
+.hami[data-mood="sleep"] .h-eyes-open { display: none; }
+.hami[data-mood="sleep"] .h-eyes-closed { display: inline; }
+.hami[data-mood="sleep"] .h-all { animation: h-breathe 5s ease-in-out infinite; }
+.hami[data-mood="sleep"] .h-ear-l { transform: rotate(-14deg); } .hami[data-mood="sleep"] .h-ear-r { transform: rotate(14deg); }
+
+/* hiệu ứng bay lên */
+.hami .h-fx { position: absolute; inset: 0; overflow: visible; }
+.hami .h-fx span { position: absolute; top: 15%; font-size: calc(var(--u) * 4); animation: h-float 1.8s ease-out forwards; }
+
+/* bong bóng thoại: nằm ở "làn bot" cuối vùng nội dung, đuôi chỉ xuống bot */
+.hami-bubble { position: absolute; z-index: 4; right: calc(var(--u) * 3); max-width: calc(var(--u) * 92);
+  background: #fff; color: #2a1d2e; border-radius: calc(var(--u) * 3.5); padding: calc(var(--u) * 1.6) calc(var(--u) * 3);
+  font-weight: 700; font-size: calc(var(--u) * 3.4); line-height: 1.3; box-shadow: 0 calc(var(--u) * .8) calc(var(--u) * 3) #0008;
+  opacity: 0; transform: translateY(calc(var(--u) * 2)) scale(.9); transform-origin: 90% 100%; transition: .25s;
+  pointer-events: none; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.hami-bubble.show { opacity: 1; transform: none; }
+.hami-bubble::after { content: ""; position: absolute; right: calc(var(--u) * 8); bottom: calc(var(--u) * -2.2);
+  border: calc(var(--u) * 1.4) solid transparent; border-top-color: #fff; border-bottom: 0; }
+.hami-bubble .b-name { color: #ff4d7a; margin-right: .4em; }
+body.safe .hami-bubble { bottom: calc(var(--H) * (100 - var(--sb)) / 100 - var(--u) * .5); }
+body:not(.safe) .hami-bubble { bottom: calc(var(--u) * 40); }
+
+@keyframes h-breathe { 50% { transform: scale(1.03, .97); } }
+@keyframes h-blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.1); } }
+@keyframes h-mouth-a { 0% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes h-mouth-b { 0% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes h-hop { 50% { transform: translateY(-10%) scale(.97, 1.04); } }
+@keyframes h-dance { 0%, 100% { transform: rotate(-9deg) translateY(0); } 50% { transform: rotate(9deg) translateY(-8%); } }
+@keyframes h-arm-up { 50% { transform: rotate(60deg); } }
+@keyframes h-arm-up-r { 50% { transform: rotate(-60deg); } }
+@keyframes h-ear-perk { to { transform: translateY(-8%); } }
+@keyframes h-shake { 25% { transform: translateX(-3%); } 75% { transform: translateX(3%); } }
+@keyframes h-wave { from { transform: rotate(0); } to { transform: rotate(-70deg); } }
+@keyframes h-float { from { opacity: 1; transform: translateY(0) scale(.8); } to { opacity: 0; transform: translateY(calc(var(--u) * -22)) scale(1.2); } }

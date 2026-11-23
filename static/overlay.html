@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HanSong LIVE</title>
 <link rel="stylesheet" href="/static/overlay.css">
+<link rel="stylesheet" href="/static/bot.css">
 </head>
 <body>
 <div id="stage" class="stage">
@@ -25,10 +26,16 @@
 
   <footer class="help in" id="help"><b>Comment A / B / C / D</b> để trả lời · gõ <b>điểm</b> để xem hạng</footer>
 
+  <div class="reserve"></div>
+
+  <div id="hami" class="hami hidden"></div>
+  <div id="hamiBubble" class="hami-bubble"></div>
   <div id="alert" class="alert hidden"></div>
+  <div id="guide" class="guide hidden"></div>
 </div>
 
 <audio id="snd" preload="auto"></audio>
+<script src="/static/bot.js"></script>
 <script src="/static/overlay.js"></script>
 </body>
 </html>

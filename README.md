@@ -33,6 +33,8 @@ Cách làm giống tu-tien-online: kết nối TikTok → chuẩn hoá sự ki�
   - 📝 **Dịch câu**: đọc câu ví dụ tiếng Hàn, chọn bản dịch đúng trong 4 câu.
   - 🈶 **Âm Hán Việt**: chọn âm Hán Việt của từ (chỉ dùng từ Hán Hàn).
   - Đáp án nhiễu của 2 dạng 🧩 và 📝 do AI (DeepSeek hoặc OpenAI) tạo sẵn ở mục **🤖 AI tạo câu hỏi** trong admin. Âm thanh dùng luôn bản đọc câu ví dụ bên HanSong.
+- 🐰 **Bot Hami**: linh vật hoạt hình ở góc phải dưới, phản ứng với mọi diễn biến (đọc đề thì nhép miệng, cảm ơn quà, nhảy khi có quà lớn, giục khi còn 5 giây, buồn khi cả phòng sai, ngủ khi tạm dừng). Người xem gõ `bot ơi …` để hỏi về tiếng Hàn, AI trả lời ngắn trong bong bóng thoại. Bot không bao giờ để lộ đáp án câu đang hỏi.
+- 📐 **Vùng an toàn**: mặc định toàn bộ nội dung nằm trong khoảng 12–62% chiều cao, không bị comment, ô nhập hay tên host của TikTok đè lên. Dùng nút **📐 Mở kèm khung TikTok** trong admin để căn lại `safe_top`/`safe_bottom` cho khớp điện thoại của bạn.
 - Gõ `điểm` hoặc `top` để xem điểm và hạng của mình.
 
 ## Chạy

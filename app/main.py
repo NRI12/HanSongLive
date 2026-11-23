@@ -109,10 +109,40 @@ def set_status(s: dict):
     STATUS.update(s)
 
 
+BOT = {"busy": False, "last": 0.0}
+BOT_GAP_S = 5      # tối đa 1 lần gọi AI / 5 giây cho cả phòng
+
+
+def bot_answer(ask: dict):
+    try:
+        cfg = ai_conf()
+        reply = ai.bot_reply(cfg, ai_key(cfg["provider"]), ask["name"], ask["text"])
+        GAME.bot_reply(ask["name"], ask["text"], reply)
+    except Exception as e:  # AI lỗi/timeout: bỏ qua câu này, không làm phiền màn hình live
+        print(f"bot AI lỗi: {type(e).__name__}", flush=True)
+    finally:
+        BOT["busy"] = False
+        BOT["last"] = time.time()
+
+
+def bot_pump():
+    if BOT["busy"] or time.time() - BOT["last"] < BOT_GAP_S:
+        return
+    with GAME.lock:
+        if not GAME.bot_asks:
+            return
+        ask = GAME.bot_asks.popleft()
+    if not ai_key(ai_conf()["provider"]):
+        return
+    BOT["busy"] = True
+    threading.Thread(target=bot_answer, args=(ask,), daemon=True).start()
+
+
 async def ticker():
     while True:
         try:
             await asyncio.to_thread(GAME.tick)
+            bot_pump()
         except Exception as e:  # không để vòng lặp chết
             GAME.message = f"Lỗi: {e}"
         await asyncio.sleep(0.25)

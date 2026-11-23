@@ -410,7 +410,7 @@ def test_api_ai_flow(client, monkeypatch):
     monkeypatch.setattr(ai.generate_items, "__defaults__", (chat, None))
     c.post("/api/ai/clear")
     c.post("/api/ai/generate", json={"n": 5}).raise_for_status()
-    for _ in range(50):
+    for _ in range(200):                                       # job chạy nền: chờ tối đa 10 giây
         if not main.AI_JOB["running"]:
             break
         import time as _t; _t.sleep(0.05)
@@ -419,3 +419,59 @@ def test_api_ai_flow(client, monkeypatch):
     q = main.picker(set(), dict(live.DEFAULT_CONFIG, mode="trans"))
     assert q["mode"] == "trans" and "Sai một." in q["options"]
     assert c.post("/api/ai/generate", json={"n": 5}).status_code == 400            # mọi từ đã có
+
+
+# ---------------------------------------------------------------- bot Hami
+from app import bot as botmod
+
+
+def test_bot_parse_ask():
+    assert botmod.parse_ask("bot ơi 사랑 nghĩa là gì") == "사랑 nghĩa là gì"
+    assert botmod.parse_ask("Hami, chào bạn") == "chào bạn"
+    assert botmod.parse_ask("@bot hello") == "hello"
+    for t in ("bot", "bota", "A", "đội đỏ", "robot ơi"):
+        assert botmod.parse_ask(t) is None
+
+
+def test_bot_reacts_and_queues_asks():
+    g, clock = make_game()
+    g.configure({"boss_every": 0, "listen_every": 0})
+    g.start()
+    assert g.bot_lines[-1]["mood"] == "talk"                      # chào câu mới
+    g.handle(C("an", "bot ơi 안녕 là gì"))
+    g.handle(C("an", "bot ơi hỏi tiếp"))                          # cùng người trong 40 giây: bỏ qua
+    assert [a["text"] for a in g.bot_asks] == ["안녕 là gì"] and "an" not in g.players  # câu hỏi bot không phải đáp án
+    clock.t += 15.5; g.tick()                                      # còn <= 5 giây -> giục
+    assert g.bot_lines[-1]["mood"] == "hurry"
+    n = g.bot_seq
+    g.handle({"type": "gift", "user": {"id": "u", "name": "Lan"}, "count": 1, "gift_name": "Rose", "diamonds": 1})
+    assert g.bot_seq == n                                          # quà nhỏ ngay sau câu giục: nhường
+    g.handle({"type": "gift", "user": {"id": "u", "name": "Lan"}, "count": 1, "gift_name": "Donut", "diamonds": 30})
+    assert g.bot_lines[-1]["mood"] == "dance" and "Lan" in g.bot_lines[-1]["text"]   # quà lớn: luôn cảm ơn
+    clock.t += 15; g.tick()
+    assert g.phase == "reveal" and g.bot_lines[-1]["mood"] == "sad"   # không ai trả lời
+    g.configure({"bot": 0})
+    n = g.bot_seq
+    g.skip()
+    assert g.bot_seq == n and g.state()["bot"] is None
+
+
+def test_bot_reply_never_leaks_answer_during_question():
+    g, clock = make_game()
+    g.configure({"boss_every": 0, "listen_every": 0})
+    g.start()
+    right = g.q["options"][g.q["answer"]]                         # "trường học"
+    g.bot_reply("an", "학교 là gì", f"학교 nghĩa là {right} nha!")
+    assert not any(right in l["text"] for l in g.bot_lines) and len(g.bot_hold) == 1
+    g.bot_reply("binh", "chào bot", "Chào bạn nha! 👋")             # không dính đáp án: nói ngay
+    assert g.bot_lines[-1]["text"] == "@binh Chào bạn nha! 👋"
+    g.skip()                                                       # hiện đáp án -> mới nói câu bị giữ
+    assert any(right in l["text"] for l in g.bot_lines) and not g.bot_hold
+
+
+def test_ai_bot_reply_cleans_output():
+    def chat(provider, model, key, system, user, timeout=0):
+        assert "Hami" in system and timeout == 20
+        return {"reply": "  Xem ở https://x.y nhé " + "a" * 200}
+    r = ai.bot_reply(ai.DEFAULT_AI, "k", "an", "hỏi", chat=chat)
+    assert "http" not in r and len(r) <= 141 and r.endswith("…")

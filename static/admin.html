@@ -74,7 +74,9 @@
   <section class="card">
     <h3>🖥 Màn hình LIVE (overlay)</h3>
     <div class="row"><input id="overlayUrl" readonly class="grow"><button class="btn" id="copyUrl">📋 Chép</button>
-      <a class="btn" id="openUrl" target="_blank">↗ Mở</a></div>
+      <a class="btn" id="openUrl" target="_blank">↗ Mở</a><a class="btn" id="guideUrl" target="_blank">📐 Mở kèm khung TikTok</a></div>
+    <p class="muted">📐 Khung TikTok vẽ ước lượng chỗ comment, ô nhập, tên host… đè lên overlay. Mở link này trong LIVE Studio/OBS khi căn chỉnh,
+      kéo hai đường xanh (safe_top / safe_bottom ở Cài đặt vòng chơi) cho khớp với điện thoại của bạn, xong thì dùng lại link thường.</p>
     <p class="muted">TikTok LIVE Studio: <b>Thêm nguồn › Liên kết / Trình duyệt</b>, dán link, kích thước 1080 × 1920.
       OBS: <b>Browser Source</b> cùng kích thước, tích "Control audio via OBS". Thêm <code>&amp;bg=0</code> vào cuối link nếu muốn nền trong suốt để chồng lên camera.</p>
   </section>
@@ -106,6 +108,11 @@
       <label>Đội Đỏ / Xanh<select name="teams"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <label>Bình chọn kiểu câu lúc hiện bảng<select name="vote"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <label>Hiện tỉ lệ A/B/C/D trong lúc hỏi<select name="live_counts"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>Vùng an toàn TikTok (không bị comment che)<select name="safe"><option value="1">Bật</option><option value="0">Tắt (phủ kín màn hình)</option></select></label>
+      <label>Chừa phía trên cho tên host (% chiều cao)<input type="number" name="safe_top" min="0" max="30"></label>
+      <label>Nội dung kết thúc ở (% chiều cao, phía dưới là comment)<input type="number" name="safe_bottom" min="40" max="100"></label>
+      <label>Bot Hami<select name="bot"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>Hami trả lời câu hỏi bằng AI ("bot ơi …")<select name="bot_ai"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <div class="row end"><button class="btn primary">💾 Lưu cài đặt</button></div>
     </form>
   </section>

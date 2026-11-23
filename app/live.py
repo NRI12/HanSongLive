@@ -18,7 +18,7 @@ import time
 import unicodedata
 from collections import deque
 
-from . import db
+from . import bot, db
 from .norm import norm_ko, norm_vi
 
 LETTERS = "ABCD"
@@ -38,13 +38,19 @@ DEFAULT_CONFIG = {
     "teams": 1,            # bật đội Đỏ / Xanh
     "vote": 1,             # bình chọn kiểu câu trong lúc hiện bảng xếp hạng
     "live_counts": 1,      # hiện số người chọn từng đáp án ngay trong lúc hỏi
+    "safe": 1,             # dồn nội dung vào vùng an toàn, chừa chỗ cho giao diện TikTok (comment, ô nhập, tên host)
+    "safe_top": 12,        # % chiều cao phía trên dành cho TikTok (tên host, số người xem)
+    "safe_bottom": 62,     # nội dung overlay kết thúc ở % này; phía dưới là comment + ô nhập của TikTok
+    "bot": 1,              # bot linh vật Hami
+    "bot_ai": 1,           # người xem gõ "bot ..." để hỏi, AI trả lời
     "source": "all",       # nguồn từ: all | today | due | hard | new | mastered
     "mode": "all",         # ko2vi | vi2ko | mix (2 kiểu trên) | cloze | trans | hanviet | all (trộn mọi kiểu đang có)
 }
 LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "board_every": (0, 50), "board_s": (4, 30),
           "like_goal": (0, 100000), "share_goal": (0, 10000), "gift_goal": (0, 1000000),
           "gift_big": (1, 1000000), "gift_huge": (1, 1000000), "boss_every": (0, 100), "listen_every": (0, 100),
-          "teams": (0, 1), "vote": (0, 1), "live_counts": (0, 1)}
+          "teams": (0, 1), "vote": (0, 1), "live_counts": (0, 1), "safe": (0, 1), "safe_top": (0, 30),
+          "safe_bottom": (40, 100), "bot": (0, 1), "bot_ai": (0, 1)}
 SOURCES = ("all", "today", "due", "hard", "new", "mastered")
 MODES = ("ko2vi", "vi2ko", "mix", "cloze", "trans", "hanviet", "all")
 KINDS = ("ko2vi", "vi2ko", "cloze", "trans", "hanviet")   # các kiểu câu thật sự
@@ -306,11 +312,42 @@ class LiveGame:
         self.last_result: dict | None = None
         self.message = ""
         self._saved: dict[str, dict] = {}     # phần điểm đã ghi vào DB, để chỉ cộng phần chênh lệch
+        self.bot_lines: deque = deque(maxlen=8)   # câu thoại của bot cho overlay: {seq, text, mood, at}
+        self.bot_seq = 0
+        self.bot_last = -1e9
+        self.bot_join_at = -1e9
+        self.hurried = False
+        self.bot_asks: deque = deque(maxlen=3)   # câu người xem hỏi bot, main.py lấy ra gọi AI
+        self.bot_cool: dict[str, float] = {}     # user_id -> lần hỏi bot gần nhất
+        self.bot_hold: list[dict] = []           # câu AI trả lời có lộ đáp án: giữ lại tới lúc hiện đáp án
 
     # -------------------------------------------------------- helpers
     def _push(self, kind: str, text: str, **extra):
         self.feed_seq += 1
         self.feed.append({"seq": self.feed_seq, "kind": kind, "text": text, "at": self.clock(), **extra})
+
+    def _bot_raw(self, text: str, mood: str):
+        self.bot_seq += 1
+        self.bot_last = self.clock()
+        self.bot_lines.append({"seq": self.bot_seq, "text": text, "mood": mood, "at": self.bot_last})
+
+    def _bot(self, kind: str, force: bool = True, **kw):
+        """force=False: câu phụ (chào người mới…), bỏ qua nếu bot vừa nói trong 5 giây để không lấn câu quan trọng."""
+        if not self.cfg["bot"] or (not force and self.clock() - self.bot_last < 5):
+            return
+        self._bot_raw(*bot.line(kind, **kw))
+
+    def bot_reply(self, name: str, ask: str, reply: str):
+        """Câu trả lời AI cho người xem. Nếu đang hỏi mà câu hỏi/câu trả lời dính tới đáp án thì giữ tới lúc hiện đáp án."""
+        with self.lock:
+            line = {"text": f"@{name[:18]} {reply}", "mood": "talk"}
+            if self.phase == "question" and self.q:
+                q = self.q
+                secrets = [q["options"][q["answer"]], q["word"].get("korean", ""), q["word"].get("vietnamese", "")]
+                if bot.leaks(ask, secrets) or bot.leaks(reply, secrets):
+                    self.bot_hold.append(line)
+                    return
+            self._bot_raw(line["text"], line["mood"])
 
     def _player(self, user: dict) -> dict:
         uid = str(user["id"])
@@ -439,6 +476,15 @@ class LiveGame:
             dur = max(8, round(dur * 0.6))
         self.q_duration = dur
         self.phase_end = self.clock() + dur
+        self.hurried = False
+        if self.sponsor:
+            self._bot("q_sponsor", name=self.sponsor)
+        elif special in SPECIALS:
+            self._bot("q_" + special)
+        elif q["mode"] in ("cloze", "trans", "hanviet"):
+            self._bot("q_" + q["mode"])
+        else:
+            self._bot("q")
 
     def _reveal(self):
         q = self.q
@@ -459,9 +505,25 @@ class LiveGame:
             if self.answers:
                 self._save([self.players[u] for u in self.answers])
             self._log_round(len(winners))
+        total = len(self.answers)
+        if not total:
+            self._bot("reveal_none")
+        else:
+            pct = round(100 * len(winners) / total)
+            name = self.players[winners[0]["uid"]]["name"] if winners else ""
+            kind = "reveal_zero" if not winners else "reveal_low" if pct < 40 else "reveal_mid" if pct < 80 \
+                else "reveal_high"
+            self._bot(kind, pct=pct, name=name)
+        for line in self.bot_hold:
+            self._bot_raw(line["text"], line["mood"])
+        self.bot_hold = []
 
     def tick(self):
         with self.lock:
+            if self.phase == "question" and not self.hurried and self.q_duration >= 10 \
+                    and 0 < self.phase_end - self.clock() <= 5:
+                self.hurried = True
+                self._bot("hurry")
             if self.phase == "idle" or self.clock() < self.phase_end:
                 return
             if self.phase == "question":
@@ -473,6 +535,10 @@ class LiveGame:
                     self.phase_end = self.clock() + self.cfg["board_s"]
                     if self.cfg["vote"]:
                         self.vote = {"counts": [0] * len(VOTE_OPTS), "voters": set()}
+                        self._bot("board_vote")
+                    else:
+                        lead = min(self.players.values(), key=lambda p: (-p["score"], p["name"]))
+                        self._bot("board", name=lead["name"])
                 else:
                     self._next_question()
             elif self.phase == "board":
@@ -500,9 +566,15 @@ class LiveGame:
                 if now - self.last_join >= 4:      # phòng đông: không để lượt vào phòng lấp hết feed
                     self.last_join = now
                     self._push("join", f"👋 Chào {name}! Comment A/B/C/D để chơi")
+                if now - self.bot_join_at >= 20:       # bot chào tối đa 1 người / 20 giây
+                    before = self.bot_seq
+                    self._bot("join", force=False, name=name)
+                    if self.bot_seq != before:
+                        self.bot_join_at = now
             elif t == "follow":
                 self.follows += 1
                 self._push("follow", f"➕ {name} đã theo dõi. Cảm ơn bạn!", alert=True, tier=1)
+                self._bot("follow", name=name)
             elif t == "share":
                 self._share(name)
 
@@ -514,6 +586,14 @@ class LiveGame:
             team = f" · đội {TEAMS[p['team']]}" if p["team"] else ""
             self._push("score", f"📊 {p['name']}: {p['score']} điểm · hạng {self._rank(p['id'])} · "
                                 f"đúng {p['correct']}/{p['answered']}{team}")
+            return
+        ask = bot.parse_ask(text)
+        if ask is not None and self.cfg["bot"]:
+            uid = str(user["id"])
+            now = self.clock()
+            if self.cfg["bot_ai"] and now - self.bot_cool.get(uid, -1e9) >= 40:   # mỗi người hỏi tối đa 1 lần / 40 giây
+                self.bot_cool[uid] = now
+                self.bot_asks.append({"uid": uid, "name": (user.get("name") or uid)[:40], "text": ask})
             return
         if self.cfg["teams"]:
             team = parse_team(text)
@@ -556,9 +636,11 @@ class LiveGame:
                 self.teams[p["team"]]["score"] += points
             if p["streak"] >= 5 and p["streak"] % 5 == 0:
                 self._push("streak", f"🔥 {p['name']} đúng liên tiếp {p['streak']} câu!", alert=True, tier=2)
+                self._bot("streak", name=p["name"], n=p["streak"])
         else:
             if p["streak"] >= 5:
                 self._push("streak", f"💔 {p['name']} mất chuỗi {p['streak']} câu")
+                self._bot("streak_lost", name=p["name"], n=p["streak"])
             p["streak"] = 0
         self.answers[uid] = {"uid": uid, "idx": idx, "at": now, "correct": ok, "points": points}
 
@@ -603,11 +685,13 @@ class LiveGame:
         if effects:
             msg += " → " + ", ".join(effects) + "!"
         self._push("gift", msg, alert=tier >= 2, tier=tier, who=p["name"], gift=gift, count=n)
+        self._bot("gift_big" if tier >= 2 else "gift", force=tier >= 2, name=p["name"])
         self.diamonds += total
         hit, self.diamond_mark = self._goal(self.diamonds, self.diamond_mark, cfg["gift_goal"])
         if hit:
             self.queued.append("boss")
             self._push("goal", f"💎 Cả phòng đủ {cfg['gift_goal']} kim cương! Sắp có CÂU BOSS x3", alert=True, tier=3)
+            self._bot("goal")
         if self.persist:
             self._save([p])
 
@@ -617,10 +701,12 @@ class LiveGame:
         if hit:
             self.double_next = True
             self._push("like", f"❤️ Đủ {self.cfg['like_goal']} tim! Câu tiếp theo nhân đôi điểm", alert=True, tier=2)
+            self._bot("goal")
 
     def _share(self, name: str):
         self.shares += 1
         self._push("share", f"🔁 {name} đã chia sẻ live")
+        self._bot("share", force=False, name=name)
         hit, self.share_mark = self._goal(self.shares, self.share_mark, self.cfg["share_goal"])
         if hit:
             self.double_next = True
@@ -747,6 +833,8 @@ class LiveGame:
                 "follows": self.follows,
                 "feed": list(self.feed),
                 "config": dict(cfg),
+                "bot": {"name": bot.NAME, "lines": list(self.bot_lines),
+                        "mood": {"idle": "sleep", "board": "happy"}.get(self.phase, "idle")} if cfg["bot"] else None,
             }
             out.update(boards or {})
             return out

@@ -206,3 +206,28 @@ def generate_items(words: list[dict], cfg: dict, key: str, chat=_chat, progress=
     if not out and errors:
         raise errors[0]
     return out
+
+
+# ---------------------------------------------------------------- bot trò chuyện trên live
+BOT_SYSTEM = """Bạn là Hami, linh vật dễ thương của một buổi livestream học từ vựng tiếng Hàn cho người Việt trên TikTok.
+Người xem gõ câu hỏi, bạn trả lời bằng tiếng Việt, thân thiện, vui vẻ, xưng "mình", gọi người xem là "bạn".
+Quy tắc:
+- Trả lời CỰC NGẮN: tối đa 1-2 câu, dưới 110 ký tự, có thể thêm 1 emoji.
+- Ưu tiên chủ đề học tiếng Hàn: nghĩa từ, cách đọc, ngữ pháp đơn giản, văn hoá Hàn. Có thể chào hỏi, tán gẫu nhẹ nhàng.
+- Từ chối khéo các chủ đề chính trị, tôn giáo, 18+, bạo lực, thông tin cá nhân, tiền bạc, mua bán; quay về chuyện học.
+- Không bao giờ hứa hẹn hay kêu gọi tặng quà để đổi lấy điểm hay quyền lợi. Không đưa link.
+- Nếu không chắc chắn về kiến thức thì nói là chưa chắc, không bịa.
+Trả về JSON: {"reply": "..."}"""
+
+
+def bot_reply(cfg: dict, key: str, name: str, text: str, chat=None) -> str:
+    chat = chat or _chat
+    provider = cfg["provider"]
+    model = cfg["model_deepseek"] if provider == "deepseek" else cfg["model_openai"]
+    data = chat(provider, model, key, BOT_SYSTEM, json.dumps({"nguoi_xem": name[:40], "hoi": text[:200]},
+                                                              ensure_ascii=False), timeout=20)
+    reply = re.sub(r"https?://\S+", "", str(data.get("reply") or "")).strip()
+    reply = re.sub(r"\s+", " ", reply)
+    if not reply:
+        raise AIError("AI không trả lời")
+    return reply[:140] + ("…" if len(reply) > 140 else "")

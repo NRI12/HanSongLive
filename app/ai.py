@@ -26,6 +26,7 @@ DEFAULT_AI = {
     "model_openai": "gpt-5.5",
     "model_deepseek": "deepseek-flash",
     "verify": True,                  # lượt thứ 2 để kiểm tra đáp án nhiễu
+    "auto": True,                    # tự tạo câu hỏi cho từ mới chưa có dữ liệu (chạy nền)
 }
 
 
@@ -55,7 +56,7 @@ def classify(provider: str, status: int, body: str) -> AIError:
     return AIError(f"{provider} {status}: {body[:300]}")
 
 
-SYSTEM = """Bạn là giáo viên tiếng Hàn giàu kinh nghiệm luyện thi TOPIK cho người Việt, đang soạn câu hỏi trắc nghiệm \
+SYSTEM = """Bạn là giáo viên tiếng Hàn giàu kinh nghiệm dạy người Việt, đang soạn câu hỏi trắc nghiệm \
 cho một buổi livestream. Đáp án nhiễu phải hợp lý (người học dễ phân vân) nhưng chắc chắn SAI. Chỉ trả về JSON hợp lệ."""
 
 ITEM_PROMPT = """Với mỗi từ dưới đây (kèm câu ví dụ example_ko và bản dịch example_vi), hãy soạn dữ liệu cho 2 dạng câu hỏi:

@@ -84,7 +84,20 @@ def ai_key(provider: str) -> str:
 AI_JOB = {"running": False, "total": 0, "done": 0, "made": 0, "detail": ""}
 
 
-def run_ai_job(words: list[dict], cfg: dict, key: str):
+AUTO = {"next": time.time() + 60, "failed": {}}   # lần kiểm tra kế tiếp; word_id -> lúc AI làm hỏng
+AUTO_EVERY_S = 60          # cứ 1 phút xem có từ mới chưa có câu hỏi AI không
+AUTO_BATCH = 30            # mỗi lần tự tạo tối đa 30 từ
+AUTO_FAIL_S = 24 * 3600    # từ nào AI làm hỏng (bị loại khi kiểm tra) thì 1 ngày sau mới thử lại, tránh tốn tiền lặp
+
+
+def missing_words(words: list[dict], redo: bool = False) -> list[dict]:
+    """Từ có câu ví dụ nhưng chưa đủ nội dung AI (cloze + trans)."""
+    have = live.load_items(words)
+    return [w for w in words if w.get("example_ko") and w.get("example_vi")
+            and (redo or w["id"] not in have["cloze"] or w["id"] not in have["trans"])]
+
+
+def run_ai_job(words: list[dict], cfg: dict, key: str, auto: bool = False):
     def progress(n_words, n_items):
         AI_JOB["done"] += n_words
         AI_JOB["made"] = n_items
@@ -92,7 +105,10 @@ def run_ai_job(words: list[dict], cfg: dict, key: str):
         rows = ai.generate_items(words, cfg, key, progress=progress)
         live.save_items(rows, words)
         mark_ai(None)
-        AI_JOB["detail"] = f"Xong: tạo được {len(rows)} câu hỏi từ {len(words)} từ"
+        now = time.time()
+        for w in missing_words(words):        # AI làm hỏng từ này: tạm bỏ qua khi tự tạo
+            AUTO["failed"][w["id"]] = now
+        AI_JOB["detail"] = f"{'Tự tạo' if auto else 'Xong'}: {len(rows)} câu hỏi từ {len(words)} từ"
     except ai.AICreditError as e:
         mark_ai(e)
     except Exception as e:  # lỗi AI/mạng: báo lên admin, không làm chết server
@@ -159,11 +175,38 @@ def bot_pump():
     threading.Thread(target=bot_answer, args=(ask,), daemon=True).start()
 
 
+def auto_check():
+    """Tự tạo câu hỏi AI cho từ mới (HanSong thêm 20 từ/ngày). Không chạy khi: tắt auto, đang có job,
+    chưa có key, hoặc API đang hết tiền/key sai và chưa tới lúc thử lại."""
+    now = time.time()
+    if now < AUTO["next"]:
+        return
+    AUTO["next"] = now + AUTO_EVERY_S
+    cfg = ai_conf()
+    key = ai_key(cfg["provider"])
+    if not cfg.get("auto") or AI_JOB["running"] or not key:
+        return
+    if GAME.ai_down and now - BOT["down_at"] < AI_RETRY_S:
+        return
+    try:
+        words = source().words("all")
+    except SourceError:
+        return
+    todo = [w for w in missing_words(words) if now - AUTO["failed"].get(w["id"], -1e18) >= AUTO_FAIL_S]
+    if not todo:
+        return
+    todo = sorted(todo, key=lambda w: -w["id"])[:AUTO_BATCH]      # từ mới nhất trước
+    AI_JOB.update(running=True, total=len(todo), done=0, made=0, detail=f"Tự tạo cho {len(todo)} từ mới…")
+    threading.Thread(target=run_ai_job, args=(todo, cfg, key, True), daemon=True).start()
+
+
 async def ticker():
     while True:
         try:
             await asyncio.to_thread(GAME.tick)
             bot_pump()
+            if time.time() >= AUTO["next"]:
+                await asyncio.to_thread(auto_check)
         except Exception as e:  # không để vòng lặp chết
             GAME.message = f"Lỗi: {e}"
         await asyncio.sleep(0.25)
@@ -220,6 +263,13 @@ def health():
 
 
 # ---------------------------------------------------------------- admin
+def ai_missing() -> int | None:
+    try:
+        return len(missing_words(source().words("all")))
+    except SourceError:
+        return None
+
+
 def admin_state():
     h, t = hansong_conf(), tiktok_conf()
     return {
@@ -231,7 +281,7 @@ def admin_state():
         "game": GAME.state(),
         "ai": {**ai_conf(), "has_openai_key": bool(ai_key("openai")), "has_deepseek_key": bool(ai_key("deepseek")),
                "down": GAME.ai_down,
-               "job": dict(AI_JOB), "counts": live.item_counts()},
+               "job": dict(AI_JOB), "counts": live.item_counts(), "missing": ai_missing()},
     }
 
 
@@ -281,8 +331,9 @@ def put_config(body: ConfigReq):
                 if not re.match(r"^[\w.\-:/]{1,80}$", v):
                     raise HTTPException(400, "Tên model không hợp lệ")
                 cur[k] = v
-        if "verify" in a:
-            cur["verify"] = a["verify"] in (True, 1, "1", "true", "on")
+        for k in ("verify", "auto"):
+            if k in a:
+                cur[k] = a[k] in (True, 1, "1", "true", "on")
         db.set_conf("ai", cur)
     if body.openai_key:                  # để trống = giữ khoá cũ; khoá không bao giờ được trả về
         db.set_conf("ai.openai_key", body.openai_key.strip())
@@ -310,9 +361,7 @@ def ai_generate(body: AIGenReq):
         words = source().words(GAME.cfg["source"])
     except SourceError as e:
         raise HTTPException(400, str(e))
-    have = live.load_items(words)
-    todo = [w for w in words if w.get("example_ko") and w.get("example_vi")
-            and (body.redo or w["id"] not in have["cloze"] or w["id"] not in have["trans"])]
+    todo = missing_words(words, body.redo)
     random.shuffle(todo)
     todo = todo[:max(1, min(300, body.n))]
     if not todo:

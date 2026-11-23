@@ -543,3 +543,37 @@ def test_bot_pump_marks_credit_down(client, monkeypatch):
     c.put("/api/config", json={"deepseek_key": "sk-new"})            # lưu key mới -> lần sau thử lại ngay
     assert main.BOT["down_at"] == 0.0
     g.set_ai_down("")
+
+
+# ---------------------------------------------------------------- tự tạo câu hỏi AI cho từ mới
+def test_auto_check_generates_and_respects_credit(client, monkeypatch):
+    c = client
+    c.put("/api/config", json={"hansong_url": "http://hansong.test", "hansong_password": "pw",
+                               "openai_key": "sk-auto", "ai": {"provider": "openai", "auto": True}}).raise_for_status()
+    c.post("/api/ai/clear")
+    calls = []
+
+    def gen(words, cfg, key, chat=None, progress=None):
+        calls.append([w["id"] for w in words])
+        return [(w["id"], k, {"answer": "x", "distractors": ["a", "b", "c"]} if k == "cloze" else {"wrong": ["a", "b", "c"]})
+                for w in words if w["id"] != 1 for k in ("cloze", "trans")]   # từ id 1: AI "làm hỏng"
+    monkeypatch.setattr(ai, "generate_items", gen)
+    wait = lambda: [__import__("time").sleep(0.02) for _ in range(250) if main.AI_JOB["running"]]
+    main.GAME.set_ai_down("")
+    main.AUTO.update(next=0, failed={})
+    main.auto_check(); wait()
+    assert calls == [[5, 4, 3, 2, 1]]                                 # từ mới nhất trước
+    assert main.AI_JOB["detail"].startswith("Tự tạo") and c.get("/api/admin").json()["ai"]["missing"] == 1
+    main.AUTO["next"] = 0
+    main.auto_check(); wait()
+    assert len(calls) == 1                                            # từ 1 vừa hỏng: không thử lại ngay (đỡ tốn tiền)
+    main.AUTO.update(next=0, failed={})
+    main.GAME.set_ai_down("credit"); main.BOT["down_at"] = __import__("time").time()
+    main.auto_check()
+    assert len(calls) == 1 and not main.AI_JOB["running"]             # đang hết credit: không gọi
+    main.GAME.set_ai_down("")
+    c.put("/api/config", json={"ai": {"auto": False}})
+    main.AUTO["next"] = 0
+    main.auto_check()
+    assert len(calls) == 1                                            # tắt tự tạo
+    assert c.get("/api/admin").json()["ai"]["auto"] is False

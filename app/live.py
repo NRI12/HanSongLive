@@ -177,7 +177,7 @@ def build_question(word: dict, pool: list[dict], mode: str) -> dict | None:
 
 def _word(word: dict) -> dict:
     return {k: word.get(k, "") for k in ("id", "korean", "romanization", "vietnamese", "hanviet", "pos",
-                                         "example_ko", "example_vi", "level")}
+                                         "example_ko", "example_vi")}
 
 
 def _shuffled(right: str, wrong: list[str]) -> tuple[list[str], int]:
@@ -813,8 +813,7 @@ class LiveGame:
                     "audio_reveal": self.q.get("audio_reveal", "mix"),
                     "word": self.q["word"] if reveal else
                     {"romanization": self.q["word"]["romanization"]
-                     if self.q["mode"] in ("ko2vi", "hanviet") and not listen else "",
-                     "level": self.q["word"]["level"]},
+                     if self.q["mode"] in ("ko2vi", "hanviet") and not listen else ""},
                     "result": self.last_result if reveal else None,
                 }
             top = sorted(self.players.values(), key=lambda p: (-p["score"], p["name"]))

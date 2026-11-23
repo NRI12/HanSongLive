@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HanSong LIVE · Điều khiển</title>
+<link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+<header class="top"><div class="logo">한<span>Song</span> <em>LIVE</em></div><div id="pill" class="pill">…</div></header>
+
+<form id="login" class="card hidden">
+  <b>Đăng nhập bảng điều khiển</b>
+  <input id="pw" type="password" placeholder="Mật khẩu (LIVE_PASSWORD)" required>
+  <button class="btn primary">Vào</button>
+  <p id="loginErr" class="err"></p>
+</form>
+
+<main id="app" class="hidden">
+  <section class="card">
+    <h3>🎮 Trò chơi</h3>
+    <div id="gameInfo" class="muted">…</div>
+    <div class="row">
+      <button class="btn primary" data-game="start">▶ Bắt đầu</button>
+      <button class="btn" data-game="pause">⏸ Tạm dừng</button>
+      <button class="btn" data-game="skip">⏭ Câu tiếp</button>
+      <button class="btn danger" data-game="reset">🗑 Xoá điểm phiên</button>
+    </div>
+    <div class="row">
+      <span class="muted">Tạo cao trào cho câu kế tiếp:</span>
+      <button class="btn" data-game="boss">👹 Câu boss x3</button>
+      <button class="btn" data-game="listen">🎧 Câu nghe</button>
+      <button class="btn" data-game="double">⚡ x2 điểm</button>
+    </div>
+    <ol id="adminTop" class="list"></ol>
+  </section>
+
+  <section class="card">
+    <h3>📡 Kết nối TikTok LIVE</h3>
+    <div id="status" class="status">…</div>
+    <div class="grid">
+      <label>Tài khoản TikTok<input id="ttUser" placeholder="ten_tai_khoan (không cần @)"></label>
+      <label>Khoá ký Euler (tuỳ chọn)<input id="ttKey" type="password" placeholder="để trống = giữ khoá cũ"></label>
+    </div>
+    <div class="row">
+      <button class="btn" id="saveTT">💾 Lưu</button>
+      <button class="btn primary" data-connect="tiktok">🔴 Kết nối TikTok</button>
+      <button class="btn" data-connect="mock">🧪 Chế độ thử</button>
+      <button class="btn" data-connect="off">⏹ Ngắt</button>
+    </div>
+    <p class="muted">Tài khoản phải đang phát LIVE thì mới kết nối được. Nếu TikTok chặn, đăng ký khoá ký miễn phí tại eulerstream.com rồi dán vào ô bên trên.</p>
+  </section>
+
+  <section class="card" id="mockCard">
+    <h3>🧪 Gửi sự kiện giả (chế độ thử)</h3>
+    <div class="grid">
+      <label>Tên người xem<input id="mName" value="Minh Anh"></label>
+      <label>Nội dung comment<input id="mText" value="A" placeholder="A / B / C / D / điểm"></label>
+    </div>
+    <div class="row">
+      <button class="btn" id="mSend">💬 Gửi comment</button>
+      <button class="btn" data-mock="random">🎲 10 người trả lời ngẫu nhiên</button>
+      <button class="btn" data-mock="gift">🌹 Quà nhỏ (1💎)</button>
+      <button class="btn" data-mock="gift-big">🍩 Quà lớn (30💎)</button>
+      <button class="btn" data-mock="gift-huge">🦁 Quà rất lớn (100💎)</button>
+      <button class="btn" data-mock="share">🔁 Chia sẻ</button>
+      <button class="btn" data-mock="team">🔴🔵 10 người vào đội</button>
+      <button class="btn" data-mock="like">❤️ +100 tim</button>
+      <button class="btn" data-mock="join">👋 Vào phòng</button>
+      <button class="btn" data-mock="follow">➕ Theo dõi</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>🖥 Màn hình LIVE (overlay)</h3>
+    <div class="row"><input id="overlayUrl" readonly class="grow"><button class="btn" id="copyUrl">📋 Chép</button>
+      <a class="btn" id="openUrl" target="_blank">↗ Mở</a></div>
+    <p class="muted">TikTok LIVE Studio: <b>Thêm nguồn › Liên kết / Trình duyệt</b>, dán link, kích thước 1080 × 1920.
+      OBS: <b>Browser Source</b> cùng kích thước, tích "Control audio via OBS". Thêm <code>&amp;bg=0</code> vào cuối link nếu muốn nền trong suốt để chồng lên camera.</p>
+  </section>
+
+  <section class="card">
+    <h3>⚙️ Cài đặt vòng chơi</h3>
+    <form id="gameCfg" class="grid">
+      <label>Nguồn từ (từ HanSong)<select name="source">
+        <option value="all">Tất cả</option><option value="today">Hôm nay</option><option value="due">Đến hạn ôn</option>
+        <option value="hard">Từ khó</option><option value="new">Chưa ôn</option><option value="mastered">Đã thuộc</option></select></label>
+      <label>Kiểu câu hỏi<select name="mode">
+        <option value="mix">Trộn cả hai</option><option value="ko2vi">Hiện tiếng Hàn → chọn nghĩa Việt</option>
+        <option value="vi2ko">Hiện tiếng Việt → chọn từ Hàn</option></select></label>
+      <label>Thời gian trả lời (giây)<input type="number" name="question_s" min="8" max="120"></label>
+      <label>Thời gian hiện đáp án (giây)<input type="number" name="reveal_s" min="3" max="30"></label>
+      <label>Hiện bảng xếp hạng sau mỗi N câu (0 = tắt)<input type="number" name="board_every" min="0" max="50"></label>
+      <label>Thời gian hiện bảng xếp hạng (giây)<input type="number" name="board_s" min="4" max="30"></label>
+      <label>Số tim để câu sau x2 (0 = tắt)<input type="number" name="like_goal" min="0" max="100000"></label>
+      <label>Số lượt chia sẻ để câu sau x2 (0 = tắt)<input type="number" name="share_goal" min="0" max="10000"></label>
+      <label>Tổng kim cương cả phòng để mở câu boss (0 = tắt)<input type="number" name="gift_goal" min="0" max="1000000"></label>
+      <label>Quà lớn từ (kim cương): +10 giây, phát lại âm<input type="number" name="gift_big" min="1" max="1000000"></label>
+      <label>Quà rất lớn từ (kim cương): nhà tài trợ câu kế<input type="number" name="gift_huge" min="1" max="1000000"></label>
+      <label>Câu boss sau mỗi N câu (0 = tắt)<input type="number" name="boss_every" min="0" max="100"></label>
+      <label>Câu nghe sau mỗi N câu (0 = tắt)<input type="number" name="listen_every" min="0" max="100"></label>
+      <label>Đội Đỏ / Xanh<select name="teams"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>Bình chọn kiểu câu lúc hiện bảng<select name="vote"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>Hiện tỉ lệ A/B/C/D trong lúc hỏi<select name="live_counts"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <div class="row end"><button class="btn primary">💾 Lưu cài đặt</button></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h3>📈 Thống kê theo câu</h3>
+    <div class="row"><button class="btn" id="loadStats">🔄 Tải thống kê</button></div>
+    <div id="stats" class="muted">Bấm tải để xem kiểu câu nào giữ chân người xem tốt nhất.</div>
+  </section>
+
+  <section class="card">
+    <h3>📚 Nguồn dữ liệu HanSong</h3>
+    <div class="grid">
+      <label>Địa chỉ HanSong<input id="hsUrl" placeholder="http://127.0.0.1:8000 hoặc https://….sslip.io"></label>
+      <label>Mật khẩu HanSong (APP_PASSWORD)<input id="hsPw" type="password" placeholder="để trống = giữ mật khẩu cũ"></label>
+    </div>
+    <div class="row">
+      <button class="btn" id="saveHS">💾 Lưu</button>
+      <button class="btn" id="checkHS">🔌 Kiểm tra kết nối</button>
+      <button class="btn" id="clearAudio">🧹 Xoá cache âm thanh</button>
+    </div>
+    <div id="hsResult" class="muted"></div>
+  </section>
+</main>
+<div id="toast" class="toast"></div>
+<script src="/static/admin.js"></script>
+</body>
+</html>

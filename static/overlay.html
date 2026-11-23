@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HanSong LIVE</title>
+<link rel="stylesheet" href="/static/overlay.css">
+</head>
+<body>
+<div id="stage" class="stage">
+  <header class="bar">
+    <div class="brand">한<span>Song</span> <em>LIVE</em></div>
+    <div class="pills">
+      <span class="pill" id="viewers">👀 0</span>
+      <span class="pill" id="players">🙋 0</span>
+    </div>
+  </header>
+
+  <div class="goals" id="goals"></div>
+  <div id="teams"></div>
+
+  <section id="main" class="main"></section>
+
+  <div id="feed" class="feed"></div>
+
+  <footer class="help in" id="help"><b>Comment A / B / C / D</b> để trả lời · gõ <b>điểm</b> để xem hạng</footer>
+
+  <div id="alert" class="alert hidden"></div>
+</div>
+
+<button id="unmute" class="unmute hidden">🔊 Bấm để bật âm thanh</button>
+<audio id="snd" preload="auto"></audio>
+<script src="/static/overlay.js"></script>
+</body>
+</html>

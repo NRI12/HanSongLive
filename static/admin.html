@@ -113,12 +113,14 @@
       <label>Nội dung kết thúc ở (% chiều cao, phía dưới là comment)<input type="number" name="safe_bottom" min="40" max="100"></label>
       <label>Bot Hami<select name="bot"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <label>Hami trả lời câu hỏi bằng AI ("bot ơi …")<select name="bot_ai"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>Hami mời thả tim / follow / ủng hộ sau mỗi N câu (0 = tắt)<input type="number" name="support_every" min="0" max="100"></label>
       <div class="row end"><button class="btn primary">💾 Lưu cài đặt</button></div>
     </form>
   </section>
 
   <section class="card">
     <h3>🤖 AI tạo câu hỏi</h3>
+    <div id="aiDown" class="status err hidden"></div>
     <div id="aiInfo" class="muted">…</div>
     <div class="grid">
       <label>Nhà cung cấp<select id="aiProvider"><option value="deepseek">DeepSeek</option><option value="openai">OpenAI</option></select></label>

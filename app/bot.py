@@ -37,12 +37,23 @@ LINES = {
     "board": ["{name} đang dẫn đầu! Ai vượt được không nè? 🏆", "Top 1 hiện tại: {name}! 👑"],
     "board_vote": ["Bình chọn kiểu câu tiếp nè: comment 1, 2 hoặc 3!"],
     "team": ["Đội {team} đang dẫn trước! Đội kia cố lên! 🔴🔵"],
+    # lời mời ủng hộ xen kẽ: chỉ nói sự thật, không hứa đổi quà lấy điểm/quyền lợi
+    "support": ["Thích buổi học thì thả tim ❤️ và follow kênh nha!", "Cảm ơn cả nhà đã học cùng Hami 💕 Ủng hộ kênh để mình live đều hơn nha!",
+                "Share live cho bạn bè cùng học tiếng Hàn nhé 🔁", "Thấy hay thì tặng Hami bông hồng nha, mình vui lắm 🌹"],
+    # CHỈ dùng khi API AI thật sự hết tiền / key hỏng (main.py bắt AICreditError)
+    "ai_broke": ["Ôi, tài khoản AI của Hami hết credit thật rồi 😭 Tạm thời mình chưa trả lời câu hỏi được, ủng hộ kênh để mình sớm được nạp lại nha 💖",
+                 "Hami hết tiền gọi AI mất rồi 😢 Cả nhà vẫn chơi đoán từ bình thường nha, ủng hộ kênh giúp mình nạp lại với 🙏"],
+    "ai_key": ["Hami đang mất kết nối AI 😵 Chờ chủ kênh sửa chút nha, mình vẫn chơi đoán từ được!"],
+    "ai_off": ["@{name} Hami đang hết credit AI nên chưa trả lời được 😢 Chơi đoán từ tiếp với mình nha!",
+               "@{name} AI của Hami tạm nghỉ vì hết credit, ủng hộ kênh để mình sớm trả lời lại nha 🙏"],
+    "ai_back": ["Hami có AI trở lại rồi! Hỏi mình bằng \"bot ơi …\" nha 🎉"],
 }
 MOOD = {"q": "talk", "q_boss": "wow", "q_listen": "talk", "q_cloze": "talk", "q_trans": "talk", "q_hanviet": "talk",
         "q_sponsor": "love", "hurry": "hurry", "reveal_none": "sad", "reveal_zero": "sad", "reveal_low": "sad",
         "reveal_mid": "happy", "reveal_high": "dance", "streak": "wow", "streak_lost": "sad", "gift": "love",
         "gift_big": "dance", "follow": "love", "share": "love", "join": "wave", "goal": "dance", "board": "happy",
-        "board_vote": "talk", "team": "happy"}
+        "board_vote": "talk", "team": "happy", "support": "love", "ai_broke": "sad", "ai_key": "sad", "ai_off": "sad",
+        "ai_back": "dance"}
 
 
 def line(kind: str, **kw) -> tuple[str, str]:

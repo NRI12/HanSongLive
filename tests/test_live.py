@@ -475,3 +475,71 @@ def test_ai_bot_reply_cleans_output():
         return {"reply": "  Xem ở https://x.y nhé " + "a" * 200}
     r = ai.bot_reply(ai.DEFAULT_AI, "k", "an", "hỏi", chat=chat)
     assert "http" not in r and len(r) <= 141 and r.endswith("…")
+
+
+# ---------------------------------------------------------------- hết credit AI (báo thật)
+def test_ai_classify_credit_errors():
+    assert isinstance(ai.classify("deepseek", 402, '{"error":{"message":"Insufficient Balance"}}'), ai.AICreditError)
+    e = ai.classify("openai", 429, '{"error":{"code":"insufficient_quota"}}')
+    assert isinstance(e, ai.AICreditError) and e.kind == "credit"
+    assert ai.classify("openai", 401, "bad key").kind == "key"
+    rate = ai.classify("openai", 429, '{"error":{"code":"rate_limit_exceeded"}}')   # quá tải tạm thời: không phải hết tiền
+    assert not isinstance(rate, ai.AICreditError)
+
+    def broke(*a, **k):
+        raise ai.AICreditError("hết tiền")
+    with pytest.raises(ai.AICreditError):
+        ai.generate_items(AIW, ai.DEFAULT_AI, "k", chat=broke)
+
+
+def test_support_line_and_ai_down_flow():
+    g, clock = make_game()
+    g.configure({"boss_every": 0, "listen_every": 0, "support_every": 2})
+    g.start(); g.skip()
+    assert g.bot_lines[-1]["mood"] != "love"                        # câu 1: chưa mời
+    g.skip(); g.skip()
+    assert g.bot_lines[-1]["text"] in botmod.LINES["support"]       # câu 2: mời ủng hộ (lời thật)
+    g.set_ai_down("credit")
+    assert g.bot_lines[-1]["text"] in botmod.LINES["ai_broke"] and g.state()["ai_down"] == "credit"
+    n = g.bot_seq
+    g.set_ai_down("credit")                                         # không đổi trạng thái: không nói lại
+    assert g.bot_seq == n
+    clock.t += 10
+    g.bot_unavailable("Lan")
+    assert "@Lan" in g.bot_lines[-1]["text"]
+    n = g.bot_seq
+    g.bot_unavailable("Tuấn")                                       # trong 30 giây: im lặng
+    assert g.bot_seq == n
+    g.set_ai_down("")
+    assert g.bot_lines[-1]["text"] in botmod.LINES["ai_back"]
+    assert not any("hết" in t and "credit" in t for t in botmod.LINES["support"])   # lời mời không bao giờ nói hết tiền
+
+
+def test_bot_pump_marks_credit_down(client, monkeypatch):
+    c = client
+    c.put("/api/config", json={"deepseek_key": "sk-ds", "ai": {"provider": "deepseek"}}).raise_for_status()
+    calls = []
+
+    def broke(cfg, key, name, text, chat=None):
+        calls.append(text)
+        raise ai.AICreditError("deepseek: tài khoản AI đã hết tiền / hết hạn mức")
+    monkeypatch.setattr(ai, "bot_reply", broke)
+    g = main.GAME
+    g.configure({"bot": 1, "bot_ai": 1})
+    g.set_ai_down("")
+    main.BOT.update(busy=False, last=0.0, down_at=0.0)
+    g.bot_asks.append({"uid": "a", "name": "An", "text": "사랑?"})
+    main.bot_pump()
+    for _ in range(200):
+        if not main.BOT["busy"]:
+            break
+        import time as _t; _t.sleep(0.05)
+    assert calls == ["사랑?"] and g.ai_down == "credit"
+    assert c.get("/api/admin").json()["ai"]["down"] == "credit"
+    main.BOT["last"] = 0.0
+    g.bot_asks.append({"uid": "b", "name": "Bình", "text": "hỏi tiếp"})
+    main.bot_pump()                                                  # đang hết tiền: không gọi API nữa
+    assert calls == ["사랑?"]
+    c.put("/api/config", json={"deepseek_key": "sk-new"})            # lưu key mới -> lần sau thử lại ngay
+    assert main.BOT["down_at"] == 0.0
+    g.set_ai_down("")

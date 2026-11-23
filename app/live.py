@@ -43,6 +43,7 @@ DEFAULT_CONFIG = {
     "safe_bottom": 62,     # nội dung overlay kết thúc ở % này; phía dưới là comment + ô nhập của TikTok
     "bot": 1,              # bot linh vật Hami
     "bot_ai": 1,           # người xem gõ "bot ..." để hỏi, AI trả lời
+    "support_every": 12,   # cứ N câu Hami mời thả tim / follow / ủng hộ kênh 1 lần (nói thật, không đổi quà lấy điểm). 0 = tắt
     "source": "all",       # nguồn từ: all | today | due | hard | new | mastered
     "mode": "all",         # ko2vi | vi2ko | mix (2 kiểu trên) | cloze | trans | hanviet | all (trộn mọi kiểu đang có)
 }
@@ -50,7 +51,8 @@ LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "board_every": (0, 50), "
           "like_goal": (0, 100000), "share_goal": (0, 10000), "gift_goal": (0, 1000000),
           "gift_big": (1, 1000000), "gift_huge": (1, 1000000), "boss_every": (0, 100), "listen_every": (0, 100),
           "teams": (0, 1), "vote": (0, 1), "live_counts": (0, 1), "safe": (0, 1), "safe_top": (0, 30),
-          "safe_bottom": (40, 100), "bot": (0, 1), "bot_ai": (0, 1)}
+          "safe_bottom": (40, 100), "bot": (0, 1), "bot_ai": (0, 1),
+          "support_every": (0, 100)}
 SOURCES = ("all", "today", "due", "hard", "new", "mastered")
 MODES = ("ko2vi", "vi2ko", "mix", "cloze", "trans", "hanviet", "all")
 KINDS = ("ko2vi", "vi2ko", "cloze", "trans", "hanviet")   # các kiểu câu thật sự
@@ -320,6 +322,8 @@ class LiveGame:
         self.bot_asks: deque = deque(maxlen=3)   # câu người xem hỏi bot, main.py lấy ra gọi AI
         self.bot_cool: dict[str, float] = {}     # user_id -> lần hỏi bot gần nhất
         self.bot_hold: list[dict] = []           # câu AI trả lời có lộ đáp án: giữ lại tới lúc hiện đáp án
+        self.ai_down = ""                        # "" | credit | key: API AI hỏng thật (main.py báo vào)
+        self.ai_off_at = -1e9
 
     # -------------------------------------------------------- helpers
     def _push(self, kind: str, text: str, **extra):
@@ -348,6 +352,26 @@ class LiveGame:
                     self.bot_hold.append(line)
                     return
             self._bot_raw(line["text"], line["mood"])
+
+    def set_ai_down(self, kind: str):
+        """main.py gọi khi API AI hết tiền / key hỏng ("credit"/"key") hoặc chạy lại được (""). Chỉ nói khi đổi trạng thái."""
+        with self.lock:
+            if kind == self.ai_down:
+                return
+            was, self.ai_down = self.ai_down, kind
+            if kind == "credit":
+                self._bot("ai_broke")
+            elif kind == "key":
+                self._bot("ai_key")
+            elif was:
+                self._bot("ai_back")
+
+    def bot_unavailable(self, name: str):
+        """Có người hỏi bot lúc AI đang hỏng: trả lời soạn sẵn, tối đa 1 lần / 30 giây."""
+        with self.lock:
+            if self.clock() - self.ai_off_at >= 30:
+                self.ai_off_at = self.clock()
+                self._bot("ai_off" if self.ai_down != "key" else "ai_key", force=False, name=name)
 
     def _player(self, user: dict) -> dict:
         uid = str(user["id"])
@@ -517,6 +541,9 @@ class LiveGame:
         for line in self.bot_hold:
             self._bot_raw(line["text"], line["mood"])
         self.bot_hold = []
+        every = self.cfg["support_every"]
+        if every and self.rounds % every == 0:
+            self._bot("support")
 
     def tick(self):
         with self.lock:
@@ -833,6 +860,7 @@ class LiveGame:
                 "follows": self.follows,
                 "feed": list(self.feed),
                 "config": dict(cfg),
+                "ai_down": self.ai_down,
                 "bot": {"name": bot.NAME, "lines": list(self.bot_lines),
                         "mood": {"idle": "sleep", "board": "happy"}.get(self.phase, "idle")} if cfg["bot"] else None,
             }

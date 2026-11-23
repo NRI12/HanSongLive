@@ -74,8 +74,27 @@ const Hami = (() => {
     setMood("idle");
   }
 
+  /* hàng chờ: câu mới không cắt ngang câu đang nói (trừ khi câu cũ đã hiện đủ 2,5 giây và hàng đã dài) */
+  const queue = [];
+  let busyUntil = 0, nextTimer;
   function say(text, mood = "talk") {
     if (!root) return;
+    if (queue.length >= 3) queue.shift();
+    queue.push([text, mood]);
+    pump();
+  }
+  function pump() {
+    clearTimeout(nextTimer);
+    if (!queue.length) return;
+    const wait = busyUntil - Date.now();
+    if (wait > 0) { nextTimer = setTimeout(pump, wait); return; }
+    const [text, mood] = queue.shift();
+    speak(text, mood);
+    busyUntil = Date.now() + Math.min(5200, 2500 + [...text].length * 40);
+    if (queue.length) nextTimer = setTimeout(pump, busyUntil - Date.now());
+  }
+
+  function speak(text, mood) {
     clearTimeout(moodTimer); clearInterval(typeTimer); clearTimeout(hideTimer);
     setMood(mood);
     root.classList.add("talking");

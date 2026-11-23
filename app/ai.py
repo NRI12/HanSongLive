@@ -33,6 +33,28 @@ class AIError(RuntimeError):
     pass
 
 
+class AICreditError(AIError):
+    """Tài khoản AI hết tiền / hết hạn mức (DeepSeek 402, OpenAI insufficient_quota) hoặc key sai (401)."""
+
+    def __init__(self, msg: str, kind: str = "credit"):
+        super().__init__(msg)
+        self.kind = kind      # credit | key
+
+
+_CREDIT_HINTS = ("insufficient_quota", "insufficient balance", "insufficient_balance", "exceeded your current quota",
+                 "billing", "payment required", "balance")
+
+
+def classify(provider: str, status: int, body: str) -> AIError:
+    """Lỗi HTTP từ API AI -> AICreditError nếu là hết tiền / key sai, còn lại AIError thường."""
+    low = (body or "").lower()
+    if status == 402 or (status in (429, 403) and any(h in low for h in _CREDIT_HINTS)):
+        return AICreditError(f"{provider}: tài khoản AI đã hết tiền / hết hạn mức", "credit")
+    if status == 401:
+        return AICreditError(f"{provider}: API key sai hoặc đã bị thu hồi", "key")
+    return AIError(f"{provider} {status}: {body[:300]}")
+
+
 SYSTEM = """Bạn là giáo viên tiếng Hàn giàu kinh nghiệm luyện thi TOPIK cho người Việt, đang soạn câu hỏi trắc nghiệm \
 cho một buổi livestream. Đáp án nhiễu phải hợp lý (người học dễ phân vân) nhưng chắc chắn SAI. Chỉ trả về JSON hợp lệ."""
 
@@ -76,7 +98,7 @@ def _chat(provider, model, key, system, user, timeout=240):
     except httpx.HTTPError as e:
         raise AIError(f"{provider}: lỗi mạng/timeout ({e})")
     if r.status_code != 200:
-        raise AIError(f"{provider} {r.status_code}: {r.text[:300]}")
+        raise classify(provider, r.status_code, r.text)
     txt = r.json()["choices"][0]["message"]["content"]
     try:
         return json.loads(txt)
@@ -197,6 +219,8 @@ def generate_items(words: list[dict], cfg: dict, key: str, chat=_chat, progress=
         for f, c in zip(futs, chunks):
             try:
                 out += f.result()
+            except AICreditError:
+                raise                # hết tiền / key sai: dừng cả job, báo rõ cho admin
             except AIError as e:
                 errors.append(e)
             except Exception as e:   # JSON lạ từ model: bỏ lô này, không làm hỏng cả job

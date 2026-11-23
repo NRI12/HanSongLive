@@ -46,6 +46,10 @@ function render(s) {
     key: DeepSeek ${A.has_deepseek_key ? "✅" : "❌"} · OpenAI ${A.has_openai_key ? "✅" : "❌"}
     ${J.running ? `<br><b style="color:var(--warn)">⏳ ${J.done}/${J.total} từ · đã tạo ${J.made} câu</b>` : J.detail ? `<br>${esc(J.detail)}` : ""}`;
   $("#aiGen").disabled = J.running;
+  $("#aiDown").classList.toggle("hidden", !A.down);
+  $("#aiDown").innerHTML = A.down === "credit"
+    ? "⚠️ <b>Tài khoản AI đã hết tiền / hết hạn mức.</b> Hami đang báo với người xem và tạm không trả lời. Nạp thêm tiền hoặc đổi key rồi bấm 💾 Lưu, app sẽ thử lại ngay (tự thử lại sau 15 phút)."
+    : A.down === "key" ? "⚠️ <b>API key AI sai hoặc đã bị thu hồi.</b> Nhập key mới rồi bấm 💾 Lưu." : "";
   $("#adminTop").innerHTML = g.top.map((p) => `<li>${esc(p.name)} <b>${p.score}</b></li>`).join("");
   $("#overlayUrl").value = location.origin + s.overlay_path;
   $("#openUrl").href = s.overlay_path;

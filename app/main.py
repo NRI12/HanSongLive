@@ -91,7 +91,10 @@ def run_ai_job(words: list[dict], cfg: dict, key: str):
     try:
         rows = ai.generate_items(words, cfg, key, progress=progress)
         live.save_items(rows, words)
+        mark_ai(None)
         AI_JOB["detail"] = f"Xong: tạo được {len(rows)} câu hỏi từ {len(words)} từ"
+    except ai.AICreditError as e:
+        mark_ai(e)
     except Exception as e:  # lỗi AI/mạng: báo lên admin, không làm chết server
         AI_JOB["detail"] = f"Lỗi: {e}"
     finally:
@@ -109,16 +112,31 @@ def set_status(s: dict):
     STATUS.update(s)
 
 
-BOT = {"busy": False, "last": 0.0}
-BOT_GAP_S = 5      # tối đa 1 lần gọi AI / 5 giây cho cả phòng
+BOT = {"busy": False, "last": 0.0, "down_at": 0.0}
+BOT_GAP_S = 5          # tối đa 1 lần gọi AI / 5 giây cho cả phòng
+AI_RETRY_S = 15 * 60   # API hết tiền: 15 phút sau mới thử gọi lại (hoặc ngay khi lưu key mới)
+
+
+def mark_ai(err: Exception | None):
+    """Ghi nhận trạng thái API AI thật sự: hết tiền / key sai / chạy lại được."""
+    if isinstance(err, ai.AICreditError):
+        BOT["down_at"] = time.time()
+        GAME.set_ai_down(err.kind)
+        AI_JOB["detail"] = f"⚠️ {err}"
+    elif err is None and GAME.ai_down:
+        GAME.set_ai_down("")
 
 
 def bot_answer(ask: dict):
     try:
         cfg = ai_conf()
         reply = ai.bot_reply(cfg, ai_key(cfg["provider"]), ask["name"], ask["text"])
+        mark_ai(None)
         GAME.bot_reply(ask["name"], ask["text"], reply)
-    except Exception as e:  # AI lỗi/timeout: bỏ qua câu này, không làm phiền màn hình live
+    except ai.AICreditError as e:
+        mark_ai(e)
+        GAME.bot_unavailable(ask["name"])
+    except Exception as e:  # AI lỗi/timeout lặt vặt: bỏ qua câu này, không làm phiền màn hình live
         print(f"bot AI lỗi: {type(e).__name__}", flush=True)
     finally:
         BOT["busy"] = False
@@ -133,6 +151,9 @@ def bot_pump():
             return
         ask = GAME.bot_asks.popleft()
     if not ai_key(ai_conf()["provider"]):
+        return
+    if GAME.ai_down and time.time() - BOT["down_at"] < AI_RETRY_S:
+        GAME.bot_unavailable(ask["name"])       # chưa tới lúc thử lại: không tốn request
         return
     BOT["busy"] = True
     threading.Thread(target=bot_answer, args=(ask,), daemon=True).start()
@@ -209,6 +230,7 @@ def admin_state():
         "overlay_path": f"/overlay?k={overlay_token()}",
         "game": GAME.state(),
         "ai": {**ai_conf(), "has_openai_key": bool(ai_key("openai")), "has_deepseek_key": bool(ai_key("deepseek")),
+               "down": GAME.ai_down,
                "job": dict(AI_JOB), "counts": live.item_counts()},
     }
 
@@ -266,6 +288,8 @@ def put_config(body: ConfigReq):
         db.set_conf("ai.openai_key", body.openai_key.strip())
     if body.deepseek_key:
         db.set_conf("ai.deepseek_key", body.deepseek_key.strip())
+    if body.openai_key or body.deepseek_key or (body.ai or {}).get("provider"):
+        BOT["down_at"] = 0.0             # key/nhà cung cấp mới: lần hỏi kế tiếp thử gọi AI ngay
     return admin_state()
 
 

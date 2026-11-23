@@ -9,6 +9,7 @@ Nội dung sinh ra (lưu ở bảng live_items, xem db.py):
   trans  : {"wrong": [3 câu tiếng Việt dịch sai example_ko]}
 """
 import json
+import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 
@@ -27,6 +28,7 @@ DEFAULT_AI = {
     "model_deepseek": "deepseek-flash",
     "verify": True,                  # lượt thứ 2 để kiểm tra đáp án nhiễu
     "auto": True,                    # tự tạo câu hỏi cho từ mới chưa có dữ liệu (chạy nền)
+    "voice": "coral",                # giọng OpenAI TTS của bot Hami
 }
 
 
@@ -85,7 +87,14 @@ Giữ nguyên thứ tự, số lượng và id. Trả về JSON cùng schema.
 
 
 # ---------------------------------------------------------------- copied from HanSong
+def _offline():
+    """Test đặt HANSONGLIVE_OFFLINE=1: chặn mọi lời gọi AI/TTS thật (tốn tiền, cần mạng)."""
+    if os.environ.get("HANSONGLIVE_OFFLINE"):
+        raise AIError("offline (đang chạy test)")
+
+
 def _chat(provider, model, key, system, user, timeout=240):
+    _offline()
     if provider == "deepseek":
         url = "https://api.deepseek.com/chat/completions"
     else:
@@ -116,11 +125,20 @@ TTS_INSTR = {
 }
 
 
-def tts(text, lang, voice, out_path, key):
-    """Chưa dùng trong live: để sẵn cho dạng bài cần câu mới (không có audio bên HanSong)."""
+VOICES = ("coral", "nova", "shimmer", "sage", "alloy", "ballad", "fable", "verse", "ash", "echo", "onyx")
+BOT_VOICE_INSTR = (
+    "Voice: Hami, a super cute, cheerful little bunny mascot hosting a Vietnamese TikTok livestream that teaches Korean. "
+    "Bright, playful, slightly high-pitched young female voice, smiling while talking, warm and a bit sweet, "
+    "energetic like a friendly livestream MC. Speak Vietnamese with a clear northern accent at a lively pace. "
+    "Pronounce any Korean words naturally in standard Seoul Korean.")
+
+
+def tts(text, lang, voice, out_path, key, instructions=None):
+    """Chép từ HanSong; thêm `instructions` để đổi chất giọng (bot Hami dùng BOT_VOICE_INSTR)."""
+    _offline()
     if not key:
         raise AIError("TTS cần OPENAI_API_KEY")
-    body = {"model": "gpt-4o-mini-tts", "voice": voice, "input": text, "instructions": TTS_INSTR[lang],
+    body = {"model": "gpt-4o-mini-tts", "voice": voice, "input": text, "instructions": instructions or TTS_INSTR[lang],
             "response_format": "mp3"}
     err = ""
     for _ in range(3):
@@ -128,9 +146,14 @@ def tts(text, lang, voice, out_path, key):
             r = httpx.post("https://api.openai.com/v1/audio/speech", json=body,
                            headers={"Authorization": f"Bearer {key}"}, timeout=120)
             if r.status_code == 200 and len(r.content) > 500:
-                with open(out_path, "wb") as f:
+                tmp = out_path + ".tmp"
+                with open(tmp, "wb") as f:
                     f.write(r.content)
+                os.replace(tmp, out_path)
                 return
+            e = classify("openai", r.status_code, r.text)
+            if isinstance(e, AICreditError):
+                raise e               # hết tiền / key sai: không thử lại vô ích
             err = f"TTS {r.status_code}: {r.text[:200]}"
         except httpx.HTTPError as e:
             err = str(e)

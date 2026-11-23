@@ -43,6 +43,7 @@ DEFAULT_CONFIG = {
     "safe_bottom": 62,     # nội dung overlay kết thúc ở % này; phía dưới là comment + ô nhập của TikTok
     "bot": 1,              # bot linh vật Hami
     "bot_ai": 1,           # người xem gõ "bot ..." để hỏi, AI trả lời
+    "bot_voice": 1,        # Hami đọc to câu thoại bằng giọng dễ thương (OpenAI TTS, cần OpenAI key)
     "support_every": 12,   # cứ N câu Hami mời thả tim / follow / ủng hộ kênh 1 lần (nói thật, không đổi quà lấy điểm). 0 = tắt
     "source": "all",       # nguồn từ: all | today | due | hard | new | mastered
     "mode": "all",         # ko2vi | vi2ko | mix (2 kiểu trên) | cloze | trans | hanviet | all (trộn mọi kiểu đang có)
@@ -51,7 +52,7 @@ LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "board_every": (0, 50), "
           "like_goal": (0, 100000), "share_goal": (0, 10000), "gift_goal": (0, 1000000),
           "gift_big": (1, 1000000), "gift_huge": (1, 1000000), "boss_every": (0, 100), "listen_every": (0, 100),
           "teams": (0, 1), "vote": (0, 1), "live_counts": (0, 1), "safe": (0, 1), "safe_top": (0, 30),
-          "safe_bottom": (40, 100), "bot": (0, 1), "bot_ai": (0, 1),
+          "safe_bottom": (40, 100), "bot": (0, 1), "bot_ai": (0, 1), "bot_voice": (0, 1),
           "support_every": (0, 100)}
 SOURCES = ("all", "today", "due", "hard", "new", "mastered")
 MODES = ("ko2vi", "vi2ko", "mix", "cloze", "trans", "hanviet", "all")

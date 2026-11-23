@@ -577,3 +577,52 @@ def test_auto_check_generates_and_respects_credit(client, monkeypatch):
     main.auto_check()
     assert len(calls) == 1                                            # tắt tự tạo
     assert c.get("/api/admin").json()["ai"]["auto"] is False
+
+
+# ---------------------------------------------------------------- giọng bot Hami
+def test_bot_speech_text():
+    assert botmod.speech_text('@Lan 사랑해요 là "anh yêu em" 💕') == 'Lan ơi, 사랑해요 là "anh yêu em"'
+    assert botmod.speech_text("Còn 5 giây! Chốt đi nào! ⏰") == "Còn 5 giây! Chốt đi nào!"
+    assert botmod.static_lines() and all("{" not in t for t in botmod.static_lines())
+
+
+def test_bot_voice_endpoint_cache_and_credit(client, monkeypatch):
+    c = client
+    c.put("/api/config", json={"openai_key": "sk-tts", "game": {"bot": 1, "bot_voice": 1}}).raise_for_status()
+    calls = []
+
+    def fake_tts(text, lang, voice, out_path, key, instructions=None):
+        calls.append(text)
+        assert key == "sk-tts" and "cute" in instructions
+        with open(out_path, "wb") as f:
+            f.write(b"ID3voice")
+    monkeypatch.setattr(ai, "tts", fake_tts)
+    main.TTS["down_at"] = 0.0
+    g = main.GAME
+    with g.lock:
+        g._bot_raw("Chào Lan! Comment A/B/C/D chơi cùng mình nha 👋", "wave")
+        seq = g.bot_seq
+    r = c.get(f"/audio/bot/{seq}.mp3")
+    assert r.status_code == 200 and r.content == b"ID3voice"
+    assert c.get(f"/audio/bot/{seq}.mp3").status_code == 200 and calls.count(calls[-1]) == 1   # lần 2 lấy cache
+    assert calls[-1] == "Chào Lan! Comment A/B/C/D chơi cùng mình nha"                          # đọc không kèm emoji
+    assert c.get("/audio/bot/999999.mp3").status_code == 404        # chỉ đọc câu engine đã tạo
+    assert c.get("/audio/1/mix.mp3").status_code != 422            # route từ vựng không bị route bot che
+
+    def broke(*a, **k):
+        raise ai.AICreditError("openai: tài khoản AI đã hết tiền / hết hạn mức")
+    monkeypatch.setattr(ai, "tts", broke)
+    with g.lock:
+        g._bot_raw("Câu mới chưa có giọng", "talk")
+        seq = g.bot_seq
+    assert c.get(f"/audio/bot/{seq}.mp3").status_code == 404
+    assert "hết tiền" in c.get("/api/admin").json()["ai"]["tts"]["detail"]
+    n = len(calls)
+    with g.lock:
+        g._bot_raw("Câu khác", "talk")
+        seq = g.bot_seq
+    c.get(f"/audio/bot/{seq}.mp3")
+    assert len(calls) == n                                          # đang hết credit: không gọi TTS nữa
+    c.put("/api/config", json={"game": {"bot_voice": 0}})
+    assert c.get(f"/audio/bot/{seq}.mp3").status_code == 404
+    main.TTS["down_at"] = 0.0

@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, db, live
+from . import ai, bot, db, live
 from .source import HanSongSource, SourceError
 from .tiktok import TikTokConnector
 
@@ -218,6 +218,7 @@ async def lifespan(_app):
     LOOP = asyncio.get_running_loop()
     db.conn()
     GAME.configure(db.get_conf("game", {}))
+    threading.Thread(target=warm_voices, daemon=True).start()
     t = asyncio.create_task(ticker())
     yield
     t.cancel()
@@ -280,7 +281,9 @@ def admin_state():
         "overlay_path": f"/overlay?k={overlay_token()}",
         "game": GAME.state(),
         "ai": {**ai_conf(), "has_openai_key": bool(ai_key("openai")), "has_deepseek_key": bool(ai_key("deepseek")),
-               "down": GAME.ai_down,
+               "down": GAME.ai_down, "voices": list(ai.VOICES),
+               "tts": {"has_key": bool(ai_key("openai")), "warm": TTS["warm"], "total": len(bot.static_lines()),
+                       "detail": TTS["detail"]},
                "job": dict(AI_JOB), "counts": live.item_counts(), "missing": ai_missing()},
     }
 
@@ -331,6 +334,8 @@ def put_config(body: ConfigReq):
                 if not re.match(r"^[\w.\-:/]{1,80}$", v):
                     raise HTTPException(400, "Tên model không hợp lệ")
                 cur[k] = v
+        if a.get("voice") in ai.VOICES:
+            cur["voice"] = a["voice"]
         for k in ("verify", "auto"):
             if k in a:
                 cur[k] = a[k] in (True, 1, "1", "true", "on")
@@ -341,6 +346,10 @@ def put_config(body: ConfigReq):
         db.set_conf("ai.deepseek_key", body.deepseek_key.strip())
     if body.openai_key or body.deepseek_key or (body.ai or {}).get("provider"):
         BOT["down_at"] = 0.0             # key/nhà cung cấp mới: lần hỏi kế tiếp thử gọi AI ngay
+    if body.openai_key or (body.ai or {}).get("voice") or (body.game or {}).get("bot_voice") in (1, "1"):
+        TTS["down_at"] = 0.0
+        TTS["warm"] = 0
+        threading.Thread(target=warm_voices, daemon=True).start()
     return admin_state()
 
 
@@ -467,6 +476,72 @@ def overlay_state():
     s = GAME.state(boards)
     s["connected"] = STATUS.get("state") == "connected"
     return s
+
+
+# ---------------------------------------------------------------- giọng bot (OpenAI TTS)
+TTS = {"down_at": 0.0, "detail": "", "warm": 0}
+TTS_LOCKS: dict[str, threading.Lock] = {}
+TTS_GUARD = threading.Lock()
+TTS_VERSION = "v1"         # đổi khi sửa BOT_VOICE_INSTR để không dùng lại file giọng cũ
+
+
+def voice_path(text: str) -> str:
+    voice = ai_conf().get("voice", "coral")
+    h = hashlib.sha1(f"{TTS_VERSION}|{voice}|{text}".encode()).hexdigest()[:20]
+    return os.path.join(db.DATA_DIR, "tts", f"{h}.mp3")
+
+
+def synth(text: str) -> str | None:
+    """Câu thoại -> file mp3 giọng Hami (có cache). None nếu không có key / TTS đang hết credit."""
+    p = voice_path(text)
+    if os.path.exists(p):
+        return p
+    key = ai_key("openai")
+    if not key or time.time() - TTS["down_at"] < AI_RETRY_S:
+        return None
+    with TTS_GUARD:
+        lock = TTS_LOCKS.setdefault(p, threading.Lock())
+    with lock:                    # 2 request cùng câu: chỉ gọi TTS 1 lần
+        if os.path.exists(p):
+            return p
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        try:
+            ai.tts(text, "vi", ai_conf().get("voice", "coral"), p, key, instructions=ai.BOT_VOICE_INSTR)
+            TTS["detail"] = ""
+        except ai.AICreditError as e:
+            TTS["down_at"] = time.time()
+            TTS["detail"] = f"⚠️ Giọng Hami tạm tắt: {e}"
+            return None
+        except ai.AIError as e:
+            TTS["detail"] = f"Lỗi giọng: {str(e)[:120]}"
+            return None
+    return p
+
+
+def warm_voices():
+    """Tạo sẵn giọng cho các câu cố định, để lúc live bot nói là phát ngay."""
+    if not GAME.cfg["bot_voice"] or not ai_key("openai"):
+        return
+    for t in bot.static_lines():
+        if synth(bot.speech_text(t)) is None:
+            return
+        TTS["warm"] += 1
+
+
+@app.get("/audio/bot/{seq}.mp3")
+def bot_voice(seq: int):
+    """Chỉ đọc câu do engine tạo (tra theo seq), không nhận chữ tuỳ ý từ ngoài."""
+    if not GAME.cfg["bot_voice"]:
+        raise HTTPException(404, "Giọng bot đang tắt")
+    with GAME.lock:
+        line = next((l for l in GAME.bot_lines if l["seq"] == seq), None)
+    text = bot.speech_text(line["text"]) if line else ""
+    if not text:
+        raise HTTPException(404, "Không có câu này")
+    p = synth(text)
+    if not p:
+        raise HTTPException(404, "Giọng bot chưa sẵn sàng")
+    return FileResponse(p, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.get("/audio/{wid}/{part}.mp3")

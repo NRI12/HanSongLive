@@ -237,6 +237,23 @@ Hami.mount($("#hami"), $("#hamiBubble"));
 snd.addEventListener("play", () => Hami.speaking(true));
 ["pause", "ended", "error"].forEach((e) => snd.addEventListener(e, () => Hami.speaking(false)));
 
+/* giọng Hami: audio riêng; nếu đang đọc từ vựng thì chờ đọc xong (tối đa 6 giây) để không chồng tiếng */
+const botSnd = new Audio();
+botSnd.preload = "auto";
+botSnd.addEventListener("playing", () => {
+  Hami.speaking(true);
+  if (isFinite(botSnd.duration)) Hami.extend(botSnd.duration * 1000 + 600);
+});
+["pause", "ended", "error"].forEach((e) => botSnd.addEventListener(e, () => Hami.speaking(false)));
+function botVoice(seq) {
+  botSnd.src = q(`/audio/bot/${seq}.mp3`);
+  const go = (tries) => {
+    if (!snd.paused && !snd.ended && tries > 0) return setTimeout(() => go(tries - 1), 300);
+    botSnd.play().catch(() => {});
+  };
+  go(20);
+}
+
 function renderBot(b) {
   $("#hami").classList.toggle("hidden", !b);
   if (!b) { $("#hamiBubble").classList.remove("show"); return; }
@@ -245,7 +262,7 @@ function renderBot(b) {
   for (const l of b.lines) {
     if (l.seq <= botSeq) continue;
     botSeq = l.seq;
-    if (fresh) Hami.say(l.text, l.mood);        // vừa mở overlay: không nói lại câu cũ
+    if (fresh) Hami.say(l.text, l.mood, cfg.bot_voice ? () => botVoice(l.seq) : null);   // vừa mở overlay: không nói lại câu cũ
   }
   if (botSeq < 0) botSeq = 0;
 }

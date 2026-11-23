@@ -85,3 +85,19 @@ def leaks(text: str, secrets: list[str]) -> bool:
         if len(k) >= 2 and k in t:
             return True
     return False
+
+
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D]+")
+
+
+def speech_text(text: str) -> str:
+    """Câu thoại -> chữ để đọc: bỏ emoji, '@Lan ...' thành 'Lan ơi, ...'."""
+    t = _EMOJI.sub("", text or "")
+    t = re.sub(r"^@(\S+)\s+", lambda m: f"{m.group(1)} ơi, ", t)
+    t = t.replace("…", "...").replace("~", "")
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def static_lines() -> list[str]:
+    """Các câu không có chỗ điền tên/số: tạo giọng sẵn lúc khởi động để khi live phát ngay."""
+    return [t for v in LINES.values() for t in v if "{" not in t]

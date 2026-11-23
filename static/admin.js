@@ -44,6 +44,8 @@ function render(s) {
   const A = s.ai, J = A.job;
   $("#aiInfo").innerHTML = `Đã có: 🧩 ${A.counts.cloze || 0} câu điền chỗ trống · 📝 ${A.counts.trans || 0} câu dịch ·
     ${A.missing != null ? `còn <b>${A.missing}</b> từ chưa có · ` : ""}tự tạo: ${A.auto ? "✅ bật" : "⏸ tắt"} ·
+    🔊 giọng Hami: ${A.tts.has_key ? `${A.tts.warm}/${A.tts.total} câu tạo sẵn` : "❌ cần OpenAI key"}
+    ${A.tts.detail ? `<br><span class="err">${esc(A.tts.detail)}</span>` : ""}<br>
     key: DeepSeek ${A.has_deepseek_key ? "✅" : "❌"} · OpenAI ${A.has_openai_key ? "✅" : "❌"}
     ${J.running ? `<br><b style="color:var(--warn)">⏳ ${J.done}/${J.total} từ · đã tạo ${J.made} câu</b>` : J.detail ? `<br>${esc(J.detail)}` : ""}`;
   $("#aiGen").disabled = J.running;
@@ -66,6 +68,8 @@ function render(s) {
     $("#aiProvider").value = A.provider; $("#aiModelDs").value = A.model_deepseek; $("#aiModelOa").value = A.model_openai;
     $("#aiVerify").value = A.verify ? "1" : "0";
     $("#aiAuto").value = A.auto ? "1" : "0";
+    $("#aiVoice").innerHTML = A.voices.map((v) => `<option value="${v}">${v}${v === "coral" ? " (dễ thương, mặc định)" : ""}</option>`).join("");
+    $("#aiVoice").value = A.voice;
     $("#aiDsKey").placeholder = A.has_deepseek_key ? "đã lưu · để trống = giữ nguyên" : "chưa có khoá";
     $("#aiOaKey").placeholder = A.has_openai_key ? "đã lưu · để trống = giữ nguyên" : "chưa có khoá";
   }
@@ -138,7 +142,7 @@ $("#loadStats").addEventListener("click", run(async () => {
 $("#aiSave").addEventListener("click", run(async () => {
   await api("/api/config", "PUT", {
     ai: { provider: $("#aiProvider").value, model_deepseek: $("#aiModelDs").value, model_openai: $("#aiModelOa").value, verify: $("#aiVerify").value,
-      auto: $("#aiAuto").value },
+      auto: $("#aiAuto").value, voice: $("#aiVoice").value },
     deepseek_key: $("#aiDsKey").value || null, openai_key: $("#aiOaKey").value || null,
   });
   $("#aiDsKey").value = $("#aiOaKey").value = ""; formLoaded = false; toast("Đã lưu ✓");

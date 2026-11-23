@@ -77,10 +77,10 @@ const Hami = (() => {
   /* hàng chờ: câu mới không cắt ngang câu đang nói (trừ khi câu cũ đã hiện đủ 2,5 giây và hàng đã dài) */
   const queue = [];
   let busyUntil = 0, nextTimer;
-  function say(text, mood = "talk") {
+  function say(text, mood = "talk", onStart = null) {
     if (!root) return;
     if (queue.length >= 3) queue.shift();
-    queue.push([text, mood]);
+    queue.push([text, mood, onStart]);
     pump();
   }
   function pump() {
@@ -88,9 +88,10 @@ const Hami = (() => {
     if (!queue.length) return;
     const wait = busyUntil - Date.now();
     if (wait > 0) { nextTimer = setTimeout(pump, wait); return; }
-    const [text, mood] = queue.shift();
+    const [text, mood, onStart] = queue.shift();
     speak(text, mood);
     busyUntil = Date.now() + Math.min(5200, 2500 + [...text].length * 40);
+    if (onStart) onStart();
     if (queue.length) nextTimer = setTimeout(pump, busyUntil - Date.now());
   }
 
@@ -119,5 +120,16 @@ const Hami = (() => {
 
   function speaking(on) { if (root) root.classList.toggle("speaking", on); }
 
-  return { mount, say, base, speaking };
+  /* giọng đọc dài hơn thời gian hiện bong bóng: giữ bong bóng + chặn câu kế tiếp tới khi đọc xong */
+  function extend(ms) {
+    const until = Date.now() + ms;
+    if (until <= busyUntil) return;
+    busyUntil = until;
+    clearTimeout(hideTimer); clearTimeout(moodTimer);
+    hideTimer = setTimeout(() => { bubble.classList.remove("show"); document.body.classList.remove("bot-talking"); }, ms);
+    moodTimer = setTimeout(() => setMood(baseMood), ms);
+    if (queue.length) { clearTimeout(nextTimer); nextTimer = setTimeout(pump, ms); }
+  }
+
+  return { mount, say, base, speaking, extend };
 })();

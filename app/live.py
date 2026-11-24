@@ -44,6 +44,8 @@ DEFAULT_CONFIG = {
     "bot": 1,              # bot linh vật Hami
     "bot_ai": 1,           # người xem gõ "bot ..." để hỏi, AI trả lời
     "bot_voice": 1,        # Hami đọc to câu thoại bằng giọng dễ thương (OpenAI TTS, cần OpenAI key)
+    "round_len": 20,       # mỗi vòng N câu; câu cuối là "chung kết vòng" (x3), xong vinh danh Vua vòng. 0 = tắt
+    "sfx": 1,              # hiệu ứng âm thanh trên overlay (tích tắc, ting, reo hò…)
     "support_every": 12,   # cứ N câu Hami mời thả tim / follow / ủng hộ kênh 1 lần (nói thật, không đổi quà lấy điểm). 0 = tắt
     "source": "all",       # nguồn từ: all | today | due | hard | new | mastered
     "mode": "all",         # ko2vi | vi2ko | mix (2 kiểu trên) | cloze | trans | hanviet | all (trộn mọi kiểu đang có)
@@ -53,7 +55,7 @@ LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "board_every": (0, 50), "
           "gift_big": (1, 1000000), "gift_huge": (1, 1000000), "boss_every": (0, 100), "listen_every": (0, 100),
           "teams": (0, 1), "vote": (0, 1), "live_counts": (0, 1), "safe": (0, 1), "safe_top": (0, 30),
           "safe_bottom": (40, 100), "bot": (0, 1), "bot_ai": (0, 1), "bot_voice": (0, 1),
-          "support_every": (0, 100)}
+          "support_every": (0, 100), "round_len": (0, 100), "sfx": (0, 1)}
 SOURCES = ("all", "today", "due", "hard", "new", "mastered")
 MODES = ("ko2vi", "vi2ko", "mix", "cloze", "trans", "hanviet", "all")
 KINDS = ("ko2vi", "vi2ko", "cloze", "trans", "hanviet")   # các kiểu câu thật sự
@@ -324,6 +326,13 @@ class LiveGame:
         self.bot_cool: dict[str, float] = {}     # user_id -> lần hỏi bot gần nhất
         self.bot_hold: list[dict] = []           # câu AI trả lời có lộ đáp án: giữ lại tới lúc hiện đáp án
         self.ai_down = ""                        # "" | credit | key: API AI hỏng thật (main.py báo vào)
+        self.greet_buf: list[dict] = []          # người mới vào phòng chờ được Hami chào (gom nhóm)
+        self.greet_at = -1e9
+        self.recent_ans: deque = deque(maxlen=6)   # dải "vừa trả lời" trên overlay
+        self.round_no = 1                        # vòng hiện tại (round_len câu / vòng)
+        self.round_q = 0                         # số câu đã hỏi trong vòng
+        self.round_end: dict | None = None       # đang vinh danh cuối vòng: {no, podium, king}
+        self.king_uid: str | None = None         # Vua vòng trước: đội vương miện
         self.ai_off_at = -1e9
 
     # -------------------------------------------------------- helpers
@@ -380,9 +389,11 @@ class LiveGame:
         if not p:
             p = self.players[uid] = {"id": uid, "name": user.get("name") or uid, "score": 0, "correct": 0,
                                      "answered": 0, "streak": 0, "best_streak": 0, "gifts": 0, "diamonds": 0,
-                                     "team": None}
+                                     "team": None, "round_score": 0, "avatar": None}
         if user.get("name"):
             p["name"] = user["name"][:40]
+        if user.get("avatar"):
+            p["avatar"] = user["avatar"]
         return p
 
     def _rank(self, uid: str) -> int:
@@ -448,7 +459,43 @@ class LiveGame:
             self.double_next = False
             self.teams = {k: {"score": 0, "members": 0} for k in TEAMS}
             self.vote_mode = None
+            self.round_no, self.round_q, self.round_end, self.king_uid = 1, 0, None, None
+            self.recent_ans.clear()
             self._push("system", "Đã xoá bảng điểm phiên này")
+
+    def _greet(self):
+        """Gom người mới vào phòng thành 1 câu chào, tối đa 1 câu / 12 giây, không chen ngang câu bot vừa nói."""
+        if not self.greet_buf or not self.cfg["bot"]:
+            self.greet_buf = [] if not self.cfg["bot"] else self.greet_buf
+            return
+        now = self.clock()
+        if now - self.greet_at < 12 or now - self.bot_last < 2.5:
+            return
+        names = [g["name"] for g in self.greet_buf]
+        self.greet_buf = []
+        self.greet_at = now
+        if len(names) == 1:
+            self._bot("greet1", a=names[0])
+        elif len(names) == 2:
+            self._bot("greet2", a=names[0], b=names[1])
+        else:
+            self._bot("greetN", a=names[-1], b=names[-2], n=len(names) - 2)
+
+    def _end_round(self):
+        """Hết câu chung kết: vinh danh top 3 của vòng, Vua vòng có vương miện tới hết vòng sau."""
+        order = sorted((p for p in self.players.values() if p["round_score"] > 0),
+                       key=lambda p: (-p["round_score"], p["name"]))
+        podium = [{"name": p["name"], "avatar": p["avatar"], "score": p["round_score"]} for p in order[:3]]
+        king = order[0] if order else None
+        self.king_uid = king["id"] if king else None
+        self.round_end = {"no": self.round_no, "podium": podium, "king": podium[0] if podium else None}
+        self.vote = None
+        self.phase = "board"
+        self.phase_end = self.clock() + self.cfg["board_s"] + 4
+        if king:
+            self._bot("round_king", name=king["name"], no=self.round_no, score=king["round_score"])
+        else:
+            self._bot("round_none", no=self.round_no)
 
     def _close_vote(self):
         v, self.vote = self.vote, None
@@ -464,9 +511,18 @@ class LiveGame:
 
     def _next_question(self):
         self._close_vote()
+        if self.round_end:                    # vừa vinh danh xong: sang vòng mới
+            self.round_end = None
+            self.round_no += 1
+            self.round_q = 0
+            for p in self.players.values():
+                p["round_score"] = 0
         n = self.qid + 1
         special = None
-        if self.queued:
+        final = bool(self.cfg["round_len"]) and self.round_q + 1 >= self.cfg["round_len"]
+        if final:
+            special = "final"
+        elif self.queued:
             special = self.queued.popleft()
         elif self.cfg["boss_every"] and n % self.cfg["boss_every"] == 0:
             special = "boss"
@@ -485,6 +541,8 @@ class LiveGame:
         self.qid = n
         self.q = q
         self.special = special
+        self.round_q += 1
+        self.recent_ans.clear()
         self.recent.append(q["word_id"])
         self.answers = {}
         self.hints = []
@@ -497,14 +555,14 @@ class LiveGame:
         self.message = ""
         self.phase = "question"
         dur = self.cfg["question_s"]
-        if special == "boss":
+        if special in ("boss", "final"):
             dur = max(8, round(dur * 0.6))
         self.q_duration = dur
         self.phase_end = self.clock() + dur
         self.hurried = False
         if self.sponsor:
             self._bot("q_sponsor", name=self.sponsor)
-        elif special in SPECIALS:
+        elif special in SPECIALS or special == "final":
             self._bot("q_" + special)
         elif q["mode"] in ("cloze", "trans", "hanviet"):
             self._bot("q_" + q["mode"])
@@ -552,13 +610,16 @@ class LiveGame:
                     and 0 < self.phase_end - self.clock() <= 5:
                 self.hurried = True
                 self._bot("hurry")
+            self._greet()
             if self.phase == "idle" or self.clock() < self.phase_end:
                 return
             if self.phase == "question":
                 self._reveal()
             elif self.phase == "reveal":
                 every = self.cfg["board_every"]
-                if every and self.rounds % every == 0 and self.players:
+                if self.special == "final" and self.players:
+                    self._end_round()
+                elif every and self.rounds % every == 0 and self.players:
                     self.phase = "board"
                     self.phase_end = self.clock() + self.cfg["board_s"]
                     if self.cfg["vote"]:
@@ -594,11 +655,9 @@ class LiveGame:
                 if now - self.last_join >= 4:      # phòng đông: không để lượt vào phòng lấp hết feed
                     self.last_join = now
                     self._push("join", f"👋 Chào {name}! Comment A/B/C/D để chơi")
-                if now - self.bot_join_at >= 20:       # bot chào tối đa 1 người / 20 giây
-                    before = self.bot_seq
-                    self._bot("join", force=False, name=name)
-                    if self.bot_seq != before:
-                        self.bot_join_at = now
+                uid = str(user["id"])
+                if len(self.greet_buf) < 30 and all(g["uid"] != uid for g in self.greet_buf):
+                    self.greet_buf.append({"uid": uid, "name": name})
             elif t == "follow":
                 self.follows += 1
                 self._push("follow", f"➕ {name} đã theo dõi. Cảm ơn bạn!", alert=True, tier=1)
@@ -656,9 +715,10 @@ class LiveGame:
             points = 10 + round(10 * remain) + (5 if first else 0) + (min(10, p["streak"]) if p["streak"] >= 3 else 0)
             if self.double:
                 points *= 2
-            if self.special == "boss":
+            if self.special in ("boss", "final"):
                 points *= BOSS_MULT
             p["score"] += points
+            p["round_score"] += points
             p["correct"] += 1
             if p["team"]:
                 self.teams[p["team"]]["score"] += points
@@ -671,6 +731,8 @@ class LiveGame:
                 self._bot("streak_lost", name=p["name"], n=p["streak"])
             p["streak"] = 0
         self.answers[uid] = {"uid": uid, "idx": idx, "at": now, "correct": ok, "points": points}
+        self.recent_ans.append({"name": p["name"], "avatar": p["avatar"], "letter": LETTERS[idx],
+                                "seq": len(self.answers)})
 
     def _join_team(self, user: dict, team: str):
         p = self._player(user)
@@ -801,7 +863,7 @@ class LiveGame:
                     "options": self.q["options"],
                     "hints": list(self.hints),
                     "double": self.double,
-                    "mult": (2 if self.double else 1) * (BOSS_MULT if self.special == "boss" else 1),
+                    "mult": (2 if self.double else 1) * (BOSS_MULT if self.special in ("boss", "final") else 1),
                     "sponsor": self.sponsor,
                     "extra": self.extra,
                     "replay": self.replay,
@@ -836,7 +898,11 @@ class LiveGame:
                 "question": q,
                 "round": self.rounds,
                 "message": self.message,
-                "top": [{k: p[k] for k in ("name", "score", "streak", "correct", "team")} for p in top[:10]],
+                "top": [{**{k: p[k] for k in ("name", "score", "streak", "correct", "team", "avatar", "round_score")},
+                         "crown": p["id"] == self.king_uid} for p in top[:10]],
+                "round_info": {"no": self.round_no, "q": self.round_q, "len": cfg["round_len"]},
+                "round_end": self.round_end,
+                "recent_ans": list(self.recent_ans) if self.phase == "question" else [],
                 "supporters": [{"name": p["name"], "gifts": p["gifts"], "diamonds": p["diamonds"]}
                                for p in supporters[:5]],
                 "hot": [{"name": p["name"], "streak": p["streak"]} for p in streakers[:3]],

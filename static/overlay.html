@@ -9,25 +9,23 @@
 </head>
 <body>
 <div id="stage" class="stage">
-  <header class="bar">
-    <div class="brand">한<span>Song</span> <em>LIVE</em></div>
-    <div class="pills">
-      <span class="pill" id="viewers">👀 0</span>
-      <span class="pill" id="players">🙋 0</span>
-    </div>
-  </header>
+  <div class="spot"></div>
 
-  <div class="goals" id="goals"></div>
-  <div id="teams"></div>
+  <!-- HUD: tiến độ vòng + các mốc chung của phòng -->
+  <header class="hud">
+    <div class="round" id="round"></div>
+    <div class="chips" id="chips"></div>
+  </header>
 
   <section id="main" class="main"></section>
 
-  <div id="feed" class="feed"></div>
-
-  <footer class="help in" id="help"><b>Comment A / B / C / D</b> để trả lời · gõ <b>điểm</b> để xem hạng</footer>
+  <!-- làn bot: dải "vừa trả lời" / mẹo chơi; bong bóng thoại của Hami hiện đè lên làn này -->
+  <div class="lane" id="lane"><div class="ticker" id="ticker"></div><div class="tips" id="tips"></div></div>
 
   <div class="reserve"></div>
 
+  <div id="splash" class="splash hidden"></div>
+  <div id="confetti" class="confetti"></div>
   <div id="hami" class="hami hidden"></div>
   <div id="hamiBubble" class="hami-bubble"></div>
   <div id="alert" class="alert hidden"></div>
@@ -35,6 +33,7 @@
 </div>
 
 <audio id="snd" preload="auto"></audio>
+<script src="/static/sfx.js"></script>
 <script src="/static/bot.js"></script>
 <script src="/static/overlay.js"></script>
 </body>

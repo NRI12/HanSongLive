@@ -17,6 +17,14 @@ LINES = {
     "q_listen": ["🎧 Câu nghe! Nghe kỹ rồi chọn nghĩa nha~", "Bịt mắt lại, chỉ nghe thôi nhé! 🎧"],
     "q_cloze": ["Điền vào chỗ trống nè, đọc gợi ý tiếng Việt nha!", "Từ nào vừa khít chỗ trống ta? 🧩"],
     "q_trans": ["Câu này nghĩa là gì nhỉ? Nghe mình đọc nè~", "Dịch câu nha cả nhà! 📝"],
+    "q_final": ["🏁 Câu CHUNG KẾT vòng! x3 điểm, quyết định Vua vòng đó!", "Câu cuối của vòng rồi! Ai sẽ là Vua vòng đây? 👑"],
+    "greet1": ["Chào {a}! Comment A/B/C/D chơi cùng Hami nha 👋", "Ơ {a} tới kìa! 안녕하세요~ Vào chơi đi nè 👋",
+               "Xin chào {a}! Đoán nghĩa từ tiếng Hàn cùng mình nha 👋"],
+    "greet2": ["Chào {a} và {b}! Vào chơi cùng Hami nha 👋", "{a} với {b} tới rồi kìa! 안녕하세요~ 👋"],
+    "greetN": ["Chào {a}, {b} và {n} bạn nữa! Comment A/B/C/D để chơi nha 👋",
+               "Đông vui quá! Chào {a}, {b} và {n} bạn mới nha 🥰"],
+    "round_king": ["👑 {name} là Vua vòng {no} với {score} điểm! Chúc mừng nha!", "Vòng {no} kết thúc! Vương miện thuộc về {name} 👑🎉"],
+    "round_none": ["Vòng {no} kết thúc! Vòng sau cả nhà cùng chơi nha 💪"],
     "q_hanviet": ["Âm Hán Việt của từ này là gì ta? 🈶", "Người Việt mình có lợi thế ở câu này đó!"],
     "q_sponsor": ["Câu này do {name} tài trợ! Cảm ơn nhiều nha 💎"],
     "hurry": ["Còn 5 giây! Chốt đi nào! ⏰", "Nhanh lên nhanh lên! 😱", "Sắp hết giờ rồi đó~"],
@@ -53,12 +61,13 @@ MOOD = {"q": "talk", "q_boss": "wow", "q_listen": "talk", "q_cloze": "talk", "q_
         "reveal_mid": "happy", "reveal_high": "dance", "streak": "wow", "streak_lost": "sad", "gift": "love",
         "gift_big": "dance", "follow": "love", "share": "love", "join": "wave", "goal": "dance", "board": "happy",
         "board_vote": "talk", "team": "happy", "support": "love", "ai_broke": "sad", "ai_key": "sad", "ai_off": "sad",
-        "ai_back": "dance"}
+        "ai_back": "dance", "q_final": "wow",
+        "greet1": "wave", "greet2": "wave", "greetN": "wave", "round_king": "dance", "round_none": "happy"}
 
 
 def line(kind: str, **kw) -> tuple[str, str]:
     """(text, mood). Tên người xem được cắt ngắn để bong bóng không bị tràn."""
-    kw = {k: (str(v)[:18] + "…" if k == "name" and len(str(v)) > 19 else v) for k, v in kw.items()}
+    kw = {k: (str(v)[:18] + "…" if k in ("name", "a", "b") and len(str(v)) > 19 else v) for k, v in kw.items()}
     return random.choice(LINES[kind]).format(**kw), MOOD[kind]
 
 

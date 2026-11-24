@@ -626,3 +626,55 @@ def test_bot_voice_endpoint_cache_and_credit(client, monkeypatch):
     c.put("/api/config", json={"game": {"bot_voice": 0}})
     assert c.get(f"/audio/bot/{seq}.mp3").status_code == 404
     main.TTS["down_at"] = 0.0
+
+
+# ---------------------------------------------------------------- lời chào gom nhóm, avatar, vòng 20 câu
+def J(uid, av=None):
+    u = {"id": uid, "name": uid}
+    if av:
+        u["avatar"] = av
+    return {"type": "join", "user": u}
+
+
+def test_grouped_greetings():
+    g, clock = make_game()
+    g.start()
+    clock.t += 3
+    for u in ("Lan", "Minh", "Tú", "Lan"):                          # Lan vào 2 lần: chỉ chào 1 lần
+        g.handle(J(u))
+    g.tick()
+    assert "Tú" in g.bot_lines[-1]["text"] and "Minh" in g.bot_lines[-1]["text"] and "1 bạn" in g.bot_lines[-1]["text"]
+    g.handle(J("Vy"))
+    clock.t += 5; g.tick()
+    assert "Vy" not in g.bot_lines[-1]["text"]                       # chưa đủ 12 giây: chờ
+    clock.t += 8; g.tick()                                            # đúng lúc bot giục giờ: chào nhường 2,5 giây
+    assert g.bot_lines[-1]["mood"] == "hurry"
+    clock.t += 3; g.tick()
+    assert "Vy" in g.bot_lines[-1]["text"] and g.bot_lines[-1]["mood"] == "wave"
+
+
+def test_avatar_recent_answers_and_round_final():
+    g, clock = make_game()
+    g.configure({"round_len": 3, "boss_every": 0, "listen_every": 0, "board_every": 0})
+    g.start()
+    av = "https://p16.tiktokcdn.com/a.webp"
+    g.handle({"type": "comment", "user": {"id": "an", "name": "An", "avatar": av}, "text": "ABCD"[g.q["answer"]]})
+    s = g.state()
+    assert s["recent_ans"][0] == {"name": "An", "avatar": av, "letter": "ABCD"[g.q["answer"]], "seq": 1}
+    assert s["top"][0]["avatar"] == av and s["round_info"] == {"no": 1, "q": 1, "len": 3}
+    g.skip(); g.skip()                                                # câu 2
+    assert g.state()["recent_ans"] == []
+    g.skip(); g.skip()                                                # câu 3 = chung kết vòng
+    assert g.special == "final" and g.state()["question"]["mult"] == 3 and g.q_duration == 12
+    g.handle(C("binh", "ABCD"[g.q["answer"]]))
+    assert g.players["binh"]["round_score"] == 25 * 3
+    clock.t += 12.1; g.tick(); clock.t += 5.1; g.tick()
+    s = g.state()
+    assert s["phase"] == "board" and s["round_end"]["no"] == 1 and s["round_end"]["king"]["name"] == "binh"
+    assert [p["name"] for p in s["round_end"]["podium"]] == ["binh", "An"]
+    assert "binh" in g.bot_lines[-1]["text"] and g.bot_lines[-1]["mood"] == "dance"
+    clock.t += 14.1; g.tick()                                         # sang vòng 2
+    s = g.state()
+    assert s["round_info"]["no"] == 2 and s["round_info"]["q"] == 1 and s["round_end"] is None
+    assert all(p["round_score"] == 0 for p in g.players.values())
+    assert next(p for p in s["top"] if p["name"] == "binh")["crown"]  # Vua vòng giữ vương miện

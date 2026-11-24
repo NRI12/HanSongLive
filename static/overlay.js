@@ -1,6 +1,7 @@
 "use strict";
-/* Overlay: hỏi trạng thái server mỗi 400ms, vẽ lại, phát âm thanh khi đổi câu / hiện đáp án,
-   hiện thông báo lớn (quà, chuỗi đúng, đạt mốc) và banner hướng dẫn luân phiên. */
+/* Overlay "sân khấu game show": hỏi trạng thái server mỗi 400ms rồi vẽ lại.
+   Hiệu ứng (màn giới thiệu câu, pháo giấy, âm thanh) chỉ chạy khi trạng thái ĐỔI (câu mới, hiện đáp án, vào bảng…),
+   không chạy lại mỗi lần vẽ. Nội dung chỉ nằm trong vùng an toàn --st%…--sb% (xem overlay.css). */
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const params = new URLSearchParams(location.search);
@@ -10,8 +11,9 @@ if (params.get("bg") === "0") document.body.classList.add("transparent");
 const L = "ABCD";
 const snd = $("#snd");
 const TEAM_ICON = { red: "🔴", blue: "🔵" };
-let last = { sound: "" }, feedSeq = -1, cfg = null;
+let last = { sound: "" }, feedSeq = -1, cfg = null, prev = null;
 
+/* ---------------------------------------------------------------- âm thanh từ vựng */
 function play(url) {
   snd.src = q(url);
   // Không hiện nút trên màn live; lỗi thoáng qua (mạng, file đang tải) thì thử lại một lần.
@@ -24,6 +26,16 @@ function play(url) {
 }
 // Trình duyệt chặn tự phát: bấm vào bất kỳ đâu trên trang để mở khoá âm thanh.
 document.addEventListener("click", () => { if (snd.paused && !snd.ended && snd.src) snd.play().catch(() => {}); });
+const sfx = (name, ...a) => { if (cfg && cfg.sfx) SFX[name](...a); };
+
+/* ---------------------------------------------------------------- avatar */
+const COLORS = ["#ff5d97", "#7b5cff", "#20c39a", "#ffb020", "#4fa8ff", "#ff6b6b", "#b05cff"];
+function hue(name) { let h = 0; for (const c of String(name)) h = (h * 31 + c.codePointAt(0)) >>> 0; return COLORS[h % COLORS.length]; }
+function avatar(p, size, extra = "") {
+  const init = esc([...String(p.name || "?").trim()][0] || "?").toUpperCase();
+  const img = p.avatar ? `<img src="${esc(p.avatar)}" referrerpolicy="no-referrer" alt="" onerror="this.remove()">` : "";
+  return `<span class="av" style="--bgc:${hue(p.name)};${size ? `--s:${size};` : ""}"><span style="position:absolute">${init}</span>${img}${extra}</span>`;
+}
 
 /* ---------------------------------------------------------------- thông báo lớn */
 const alerts = [];
@@ -44,27 +56,50 @@ function nextAlert() {
       <div class="a-sub">tặng ${esc(f.gift)} ×${f.count}</div>
       <div class="a-thanks">${tier >= 3 ? "Cảm ơn nhà tài trợ! 🙇" : "Cảm ơn bạn! 💖"}</div>
       <div class="a-fx">${esc(f.text.split("→")[1] || "")}</div>`;
+    sfx("sparkle");
+    if (tier >= 3) confetti(60);
   } else {
     box.innerHTML = `<div class="a-text">${esc(f.text)}</div>`;
+    if (f.kind === "goal" || f.kind === "like") { sfx("fanfare"); confetti(40); }
   }
   box.className = `alert t${tier} k-${f.kind}`;
   setTimeout(nextAlert, tier >= 3 ? 3800 : 2400);
 }
 
-/* ---------------------------------------------------------------- banner luân phiên */
+function confetti(n = 50) {
+  const box = $("#confetti");
+  const colors = ["#ff3d7f", "#7b5cff", "#ffe066", "#20c39a", "#4fa8ff", "#fff"];
+  for (let i = 0; i < n; i++) {
+    const c = document.createElement("i");
+    c.style.left = Math.random() * 100 + "%";
+    c.style.background = colors[i % colors.length];
+    c.style.animationDuration = 1.6 + Math.random() * 1.6 + "s";
+    c.style.animationDelay = Math.random() * 0.4 + "s";
+    box.appendChild(c);
+    setTimeout(() => c.remove(), 3800);
+  }
+}
+
+function splash(no, kind, cls = "") {
+  const el = $("#splash");
+  el.className = "splash hidden";
+  el.innerHTML = `<div class="no">${esc(no)}</div><div class="kind">${esc(kind)}</div>`;
+  void el.offsetWidth;
+  el.className = "splash " + cls;
+  clearTimeout(splash.t);
+  splash.t = setTimeout(() => el.classList.add("hidden"), 1450);
+}
+
+/* ---------------------------------------------------------------- mẹo chơi luân phiên (làn bot) */
 function tips() {
   if (!cfg) return [];
   const t = ["<b>Comment A / B / C / D</b> để trả lời · gõ <b>điểm</b> để xem hạng",
-    "⚡ Trả lời nhanh được thêm điểm · đúng liên tiếp 3 câu trở lên có thưởng chuỗi 🔥"];
+    "⚡ Trả lời nhanh được thêm điểm · đúng liên tiếp 3 câu có thưởng chuỗi 🔥"];
   t.push(`🎁 Tặng quà = loại 1 đáp án sai · quà từ ${cfg.gift_big}💎 thêm 10 giây cho cả phòng`);
-  if (cfg.gift_huge) t.push(`💎 Quà từ ${cfg.gift_huge}💎 = tên bạn là <b>nhà tài trợ</b> câu kế tiếp`);
+  if (cfg.round_len) t.push(`🏁 Mỗi vòng ${cfg.round_len} câu, câu cuối x3 điểm · cao điểm nhất vòng làm <b>Vua vòng 👑</b>`);
   if (cfg.like_goal) t.push(`❤️ Thả tim đủ ${cfg.like_goal} = câu sau <b>x2 điểm</b>`);
-  if (cfg.share_goal) t.push(`🔁 Chia sẻ live đủ ${cfg.share_goal} lượt = câu sau <b>x2 điểm</b>`);
   if (cfg.gift_goal) t.push(`💎 Cả phòng đủ ${cfg.gift_goal} kim cương = mở <b>CÂU BOSS x3</b>`);
-  if (cfg.teams) t.push("🔴🔵 Gõ <b>đội đỏ</b> hoặc <b>đội xanh</b> để vào đội, điểm của bạn cộng cho đội");
-  if (cfg.boss_every) t.push(`👹 Cứ ${cfg.boss_every} câu có 1 <b>CÂU BOSS</b> x3 điểm`);
-  if (cfg.listen_every) t.push(`🎧 Cứ ${cfg.listen_every} câu có 1 <b>câu nghe</b>: chỉ nghe, không nhìn chữ`);
-  if (cfg.vote && cfg.board_every) t.push("🗳 Lúc hiện bảng xếp hạng: comment <b>1 / 2 / 3</b> để chọn kiểu câu tiếp theo");
+  if (cfg.teams) t.push("🔴🔵 Gõ <b>đội đỏ</b> hoặc <b>đội xanh</b> để vào đội");
   if (cfg.bot && cfg.bot_ai) t.push("🐰 Gõ <b>bot ơi …</b> để hỏi Hami về tiếng Hàn");
   t.push("➕ Theo dõi kênh để không bỏ lỡ buổi học tiếng Hàn sau nhé!");
   return t;
@@ -72,163 +107,164 @@ function tips() {
 let tipIdx = 0;
 function rotateTip() {
   const t = tips();
-  if (t.length) {
-    const el = $("#help");
-    el.classList.remove("in"); void el.offsetWidth;
-    el.innerHTML = t[tipIdx++ % t.length];
-    el.classList.add("in");
-  }
+  if (!t.length) return;
+  const el = $("#tips");
+  el.classList.remove("in"); void el.offsetWidth;
+  el.innerHTML = `<span>${t[tipIdx++ % t.length]}</span>`;   // bọc span: flex không nuốt khoảng trắng quanh <b>
+  el.classList.add("in");
 }
 setInterval(rotateTip, 6000);
 
-/* ---------------------------------------------------------------- render */
-function topList(rows, valueKey = "score", unit = "") {
-  return rows.map((p) => `<li><span class="n">${p.team ? TEAM_ICON[p.team] + " " : ""}${esc(p.name)}</span><b>${p[valueKey]}${unit}</b></li>`).join("")
-    || `<li><span class="n" style="color:var(--muted)">Chưa có ai</span></li>`;
-}
-
-function badge(Q) {
-  const b = [];
-  if (Q.special === "boss") b.push(`<span class="x2 boss">👹 BOSS x${Q.mult}</span>`);
-  else if (Q.double) b.push(`<span class="x2">x2 ĐIỂM</span>`);
-  if (Q.special === "listen") b.push(`<span class="x2 listen">🎧 NGHE</span>`);
-  return b.join(" ");
-}
-
-function renderQuestion(s) {
-  const Q = s.question, reveal = s.phase === "reveal";
-  const pct = s.duration ? Math.max(0, Math.min(100, (s.remaining / s.duration) * 100)) : 0;
-  const counts = Q.counts;
-  const total = counts ? Math.max(1, counts.reduce((a, b) => a + b, 0)) : 1;
-  const ask = Q.listen ? "Nghe và chọn nghĩa đúng" : ASK[Q.mode] || "Chọn đáp án đúng";
-  const optLang = OPT_LANG[Q.mode] || "vi";
-  const sentence = Q.mode === "cloze" || Q.mode === "trans";
-  const opts = Q.options.map((o, i) => {
-    let cls = "opt " + optLang;
-    if (reveal) cls += i === Q.answer ? " right" : " wrong";
-    else if (Q.hints.includes(i)) cls += " out";
-    const c = counts ? counts[i] : 0;
-    return `<div class="${cls}"><span class="l">${L[i]}</span><span class="t">${esc(o)}</span>
-      ${counts ? `<span class="bar" style="width:${(c / total) * 100}%"></span><span class="pct">${Math.round((c / total) * 100)}% · ${c}</span>` : ""}</div>`;
-  }).join("");
-  const sponsor = Q.sponsor ? `<div class="sponsor">💎 Câu này được tài trợ bởi <b>${esc(Q.sponsor)}</b></div>` : "";
-  if (!reveal) {
-    const hot = s.hot.length ? s.hot.map((p) => `<span class="hot">🔥 ${esc(p.name)} <b>${p.streak}</b></span>`).join("") : "";
-    let body = `<div class="card ${Q.special ? "sp-" + Q.special : ""}">
-      <div class="qhead"><span>Câu ${s.round + 1} · ${ask}</span>${badge(Q)}</div>
-      <div class="prompt ${Q.listen ? "listen" : Q.prompt_lang}${sentence ? " sent" : ""}">${promptHtml(Q)}</div>
-      ${Q.hint ? `<div class="hint">${Q.mode === "hanviet" ? "Nghĩa: " : "💬 "}${esc(Q.hint)}</div>` : ""}
-      <div class="timer ${s.remaining < 5 ? "low" : ""}"><i style="width:${pct}%"></i></div>
-      <div class="sub">⏱ ${Math.ceil(s.remaining)} giây${Q.extra ? ` <b class="extra">+${Q.extra}s nhờ quà</b>` : ""} · ${Q.answered} người đã trả lời</div>
-    </div>
-    ${sponsor}
-    <div class="opts${Q.mode === "trans" ? " long" : ""}">${opts}</div>`;
-    if (s.top.length || hot) body += `<div class="mini-top">${hot}${s.top.slice(0, 4).map((p, i) => `<span>${i + 1}. ${esc(p.name)} <b>${p.score}</b></span>`).join("")}</div>`;
-    return body;
+/* dải "vừa trả lời": giữ phần tử cũ, chỉ thêm người mới để hiệu ứng trượt vào không chạy lại */
+let tickQ = 0, tickSeq = 0;
+function renderTicker(s) {
+  const box = $("#ticker"), rows = s.phase === "question" ? s.recent_ans || [] : [];
+  const qid = s.question && s.phase === "question" ? s.question.id : 0;
+  if (qid !== tickQ) { box.innerHTML = ""; tickQ = qid; tickSeq = 0; }
+  for (const r of rows) {
+    if (r.seq <= tickSeq) continue;
+    const d = document.createElement("div");
+    d.className = "tick";
+    d.innerHTML = `${avatar(r)}<span class="nm">${esc(r.name)}</span>${cfg.live_counts ? `<em>${esc(r.letter)}</em>` : "⚡"}`;
+    box.prepend(d);
+    tickSeq = r.seq;
   }
-  const w = Q.word, r = Q.result;
-  return `<div class="card reveal ${Q.special ? "sp-" + Q.special : ""}">
-      <div class="qhead"><span>Đáp án câu ${s.round}</span>${badge(Q)}</div>
-      <div class="ko">${esc(w.korean)}</div>
-      ${w.hanviet || w.pos ? `<div class="sub">${[w.hanviet ? `<span class="hv">${esc(w.hanviet)}</span>` : "", esc(w.pos || "")].filter(Boolean).join(" · ")}</div>` : ""}
-      <div class="vi">${esc(w.vietnamese)}</div>
-      ${w.example_ko ? `<div class="ex${sentence ? " focus" : ""}"><div class="k">${esc(w.example_ko)}</div><div>${esc(w.example_vi)}</div></div>` : ""}
-    </div>
-    ${SAFE() ? resultLine(Q, r) : `<div class="opts compact${Q.mode === "trans" ? " long" : ""}">${opts}</div>
-    <div class="reveal">
-      ${r.fastest.length ? `<div class="fast">${r.fastest.map((f, i) => `<span>${["🥇", "🥈", "🥉"][i]} ${esc(f.name)} +${f.points}</span>`).join("")}</div>` : ""}
-      <div class="stat">${r.correct}/${r.total} người trả lời đúng</div>
-    </div>`}`;
+  while (box.children.length > 4) box.lastChild.remove();
+  $("#lane").classList.toggle("has-ticker", box.children.length > 0);
 }
 
-const SAFE = () => !!(cfg && cfg.safe);
-function resultLine(Q, r) {   // vùng an toàn chật: gộp đáp án + kết quả vào 1 dòng
-  const right = Q.options[Q.answer];
-  return `<div class="result-line"><span class="ok">✅ <b>${L[Q.answer]}</b> ${esc(right.length > 28 ? right.slice(0, 27) + "…" : right)}</span>
-    <span class="st">${r.correct}/${r.total} đúng</span>
-    ${r.fastest.length ? `<span class="fast"><span>🥇 ${esc(r.fastest[0].name)} +${r.fastest[0].points}</span></span>` : ""}</div>`;
+/* ---------------------------------------------------------------- HUD */
+function renderHud(s) {
+  const R = s.round_info, Q = s.question;
+  if (R && R.len) {
+    const final = Q && Q.special === "final" && s.phase !== "board";
+    $("#round").innerHTML = `<span>Vòng ${R.no}</span><span class="bar"><i style="width:${(Math.min(R.q, R.len) / R.len) * 100}%"></i></span>
+      <span class="${final ? "final" : ""}">${final ? "🏁 CHUNG KẾT" : `Câu ${R.q}/${R.len}`}</span>`;
+  } else $("#round").innerHTML = `<span>Câu ${s.round + (s.phase === "question" ? 1 : 0)}</span><span class="bar"><i style="width:0"></i></span>`;
+  const G = s.goals, out = [];
+  const chip = (cls, x, text, hot) => out.push(`<div class="chip ${cls}${hot ? " hot" : ""}"><i style="width:${Math.min(1, x) * 100}%"></i><span>${text}</span></div>`);
+  if (G.likes.goal) chip("", s.double_next ? 1 : G.likes.progress, s.double_next ? "❤️ x2 câu sau!" : `❤️ ${G.likes.value}/${G.likes.goal}`, s.double_next);
+  else chip("", 0, `❤️ ${s.likes}`);
+  if (G.diamonds.goal) chip("dia", s.next_special === "boss" ? 1 : G.diamonds.progress,
+    s.next_special === "boss" ? "👹 Sắp BOSS!" : `💎 ${G.diamonds.value}/${G.diamonds.goal}`, s.next_special === "boss");
+  if (G.shares.goal) chip("share", G.shares.progress, `🔁 ${G.shares.value}/${G.shares.goal}`);
+  const t = s.teams;
+  if (t && (t.red.members || t.blue.members)) {
+    const r = t.red.score + t.blue.score ? t.red.score / (t.red.score + t.blue.score) : 0.5;
+    chip("team", r, `🔴 ${t.red.score} · ${t.blue.score} 🔵`);
+  }
+  $("#chips").innerHTML = out.join("");
 }
 
-const ASK = { ko2vi: "Từ này nghĩa là gì?", vi2ko: "Tiếng Hàn của từ này là gì?", cloze: "Điền vào chỗ trống",
-  trans: "Câu này nghĩa là gì?", hanviet: "Âm Hán Việt của từ này?" };
+/* ---------------------------------------------------------------- câu hỏi + đáp án */
+const ASK = { ko2vi: "Từ này nghĩa là gì?", vi2ko: "Tiếng Hàn là gì?", cloze: "Điền vào chỗ trống",
+  trans: "Câu này nghĩa là gì?", hanviet: "Âm Hán Việt là gì?" };
+const KIND = { ko2vi: "Hàn → Việt", vi2ko: "Việt → Hàn", cloze: "🧩 Điền chỗ trống", trans: "📝 Dịch câu", hanviet: "🈶 Hán Việt" };
 const OPT_LANG = { ko2vi: "vi", vi2ko: "ko", cloze: "ko", trans: "vi", hanviet: "vi" };
 const BLANK = "＿＿＿";
 function promptHtml(Q) {
   if (Q.mode !== "cloze") return esc(Q.prompt);
   return esc(Q.prompt).replace(BLANK, `<span class="blank">${BLANK}</span>`);
 }
-
-function renderVote(v) {
-  const total = Math.max(1, v.counts.reduce((a, b) => a + b, 0));
-  return `<div class="card vote"><div class="side-title">🗳 Chọn kiểu câu tiếp theo: comment <b>1 / 2 / 3</b></div>
-    <div class="vopts">${v.options.map((o, i) => `<div class="vopt"><span class="bar" style="width:${(v.counts[i] / total) * 100}%"></span>
-      <span class="l">${i + 1}</span><span class="t">${esc(o)}</span><b>${v.counts[i]}</b></div>`).join("")}</div></div>`;
+function badge(Q) {
+  if (Q.special === "final") return `<span class="badge final">🏁 CHUNG KẾT x${Q.mult}</span>`;
+  if (Q.special === "boss") return `<span class="badge boss">👹 BOSS x${Q.mult}</span>`;
+  if (Q.special === "listen") return `<span class="badge listen">🎧 NGHE${Q.double ? " · x2" : ""}</span>`;
+  if (Q.double) return `<span class="badge x2">x2 ĐIỂM</span>`;
+  return "";
+}
+function ring(s) {
+  const frac = s.duration ? Math.max(0, Math.min(1, s.remaining / s.duration)) : 0, C = 2 * Math.PI * 42;
+  return `<div class="ring${s.remaining <= 5 ? " low" : ""}"><svg viewBox="0 0 100 100"><circle class="bg" cx="50" cy="50" r="42"/>
+    <circle class="fg" cx="50" cy="50" r="42" stroke-dasharray="${C}" stroke-dashoffset="${C * (1 - frac)}"/></svg><b>${Math.ceil(s.remaining)}</b></div>`;
 }
 
-function renderBoard(s) {
-  const rec = s.all_time[0];
-  if (SAFE()) {   // vùng an toàn: top 4 + (bình chọn hoặc vua tuần/fan)
-    return `<div class="card big">
-      <div class="board-title">🏆 Bảng xếp hạng sau ${s.round} câu</div>
-      <ol class="top">${topList(s.top.slice(0, s.vote ? 3 : 4))}</ol>
-    </div>
-    ${s.vote ? renderVote(s.vote) : `<div class="cols">
-      <div class="card"><div class="side-title">👑 Vua tuần</div><ol class="top">${topList(s.weekly.slice(0, 2))}</ol></div>
-      <div class="card"><div class="side-title">🎁 Cảm ơn quà</div><ol class="top">${topList(s.supporters.slice(0, 2), "diamonds", "💎")}</ol></div>
-    </div>`}`;
+function renderQuestion(s) {
+  const Q = s.question, reveal = s.phase === "reveal";
+  const counts = Q.counts, total = counts ? Math.max(1, counts.reduce((a, b) => a + b, 0)) : 1;
+  const sentence = Q.mode === "cloze" || Q.mode === "trans", long = Q.mode === "trans";
+  const opts = Q.options.map((o, i) => {
+    const c = counts ? counts[i] : 0;
+    return `<div class="opt ${OPT_LANG[Q.mode] || "vi"}${!reveal && Q.hints.includes(i) ? " out" : ""}">
+      ${counts ? `<span class="fill" style="width:${(c / total) * 100}%"></span>` : ""}
+      <span class="l">${L[i]}</span><span class="t">${esc(o)}</span>
+      ${counts && c ? `<span class="cnt">${Math.round((c / total) * 100)}%</span>` : ""}</div>`;
+  }).join("");
+  if (!reveal) {
+    return `<div class="card ${Q.special ? "sp-" + Q.special : ""}">
+        ${ring(s)}
+        <div class="qhead"><span class="tag">${Q.listen ? "🎧 Nghe" : KIND[Q.mode] || ""}</span>${badge(Q)}</div>
+        <div class="prompt ${Q.listen ? "listen" : Q.prompt_lang}${sentence ? " sent" : ""}">${promptHtml(Q)}</div>
+        ${Q.hint ? `<div class="hint">${Q.mode === "hanviet" ? "Nghĩa: " : "💬 "}${esc(Q.hint)}</div>` : ""}
+        <div class="meta">${Q.sponsor ? `💎 Tài trợ bởi <b class="sp">${esc(Q.sponsor)}</b>` : ASK[Q.mode] || ""} · ${Q.answered} người đã chọn${Q.extra ? ` · <b class="extra">+${Q.extra}s nhờ quà</b>` : ""}</div>
+      </div>
+      <div class="opts${long ? " long" : ""}">${opts}</div>`;
   }
-  const fan = s.weekly_fans[0];
-  return `<div class="card big">
-      <div class="board-title">🏆 Bảng xếp hạng sau ${s.round} câu</div>
-      <ol class="top">${topList(s.top.slice(0, s.vote ? 4 : 6))}</ol>
-      ${rec ? `<div class="record">🌟 Kỷ lục mọi thời đại: <b>${esc(rec.name)}</b> ${rec.score} điểm</div>` : ""}
+  const w = Q.word, r = Q.result, right = Q.options[Q.answer];
+  return `<div class="card reveal ${Q.special ? "sp-" + Q.special : ""}">
+      <div class="qhead"><span class="tag">✅ Đáp án</span>${badge(Q)}</div>
+      <div class="ko">${esc(w.korean)}</div>
+      ${w.hanviet || w.pos ? `<div class="sub">${[w.hanviet ? `<span class="hv">${esc(w.hanviet)}</span>` : "", esc(w.pos || "")].filter(Boolean).join(" · ")}</div>` : ""}
+      <div class="vi">${esc(w.vietnamese)}</div>
+      ${w.example_ko ? `<div class="ex${sentence ? " focus" : ""}"><div class="k">${esc(w.example_ko)}</div><div>${esc(w.example_vi)}</div></div>` : ""}
     </div>
-    ${s.vote ? renderVote(s.vote) : ""}
-    <div class="cols">
-      <div class="card"><div class="side-title">👑 Vua tuần này</div><ol class="top">${topList(s.weekly.slice(0, 3))}</ol></div>
-      <div class="card"><div class="side-title">🎁 Cảm ơn đã tặng quà</div><ol class="top">${topList(s.supporters.slice(0, 3), "diamonds", "💎")}</ol>
-        ${fan ? `<div class="record small">💖 Fan cứng tuần: <b>${esc(fan.name)}</b></div>` : ""}</div>
-    </div>`;
+    <div class="result"><span class="ok"><span class="l">${L[Q.answer]}</span><span>${esc(right)}</span></span>
+      <span class="st">${r.correct}/${r.total} đúng</span></div>
+    ${r.fastest.length ? `<div class="winners">${r.fastest.map((f, i) => {
+      const p = s.top.find((t) => t.name === f.name) || {};
+      return `<div class="win">${avatar({ ...p, name: f.name }, "calc(var(--u) * 7)", `<span class="medal">${["🥇", "🥈", "🥉"][i]}</span>`)}
+        <span class="nm">${esc(f.name)}</span><span class="pt">+${f.points}</span></div>`;
+    }).join("")}</div>` : ""}`;
+}
+
+/* ---------------------------------------------------------------- bục vinh quang */
+function podium(rows, key = "score") {
+  const slot = (p, n) => p
+    ? `<div class="pod p${n}">${avatar(p, n === 1 ? "calc(var(--u) * 11)" : "calc(var(--u) * 8.5)", p.crown || n === 1 ? `<span class="crown">👑</span>` : "")}
+        <span class="nm">${esc(p.name)}</span><span class="pt">${p[key]} điểm</span><div class="base">${n}</div></div>`
+    : `<div class="pod p${n} empty"><span class="nm">…</span><div class="base">${n}</div></div>`;
+  return `<div class="podium">${slot(rows[1], 2)}${slot(rows[0], 1)}${slot(rows[2], 3)}</div>`;
+}
+function ranks(rows, from) {
+  return rows.length ? `<ol class="ranks">${rows.map((p, i) => `<li><span class="rk">${from + i}</span>${avatar(p, "calc(var(--u) * 6)")}
+    <span class="n">${p.team ? TEAM_ICON[p.team] + " " : ""}${p.crown ? "👑 " : ""}${esc(p.name)}</span><b>${p.score}</b></li>`).join("")}</ol>` : "";
+}
+function thanks(s) {   // 1 dòng gọn: Vua tuần + người tặng quà nhiều nhất phiên
+  const parts = [];
+  if (s.weekly[0]) parts.push(`👑 Vua tuần: <b>${esc(s.weekly[0].name)}</b>`);
+  if (s.supporters.length) parts.push(`🎁 Cảm ơn ${s.supporters.slice(0, 2).map((p) => `<b>${esc(p.name)}</b> ${p.diamonds}💎`).join(", ")}`);
+  return parts.length ? `<div class="thanks">${parts.join(" · ")}</div>` : "";
+}
+function renderVote(v) {
+  const total = Math.max(1, v.counts.reduce((a, b) => a + b, 0));
+  return `<div class="card"><div class="side-title">🗳 Chọn kiểu câu tiếp theo: comment <b>1 / 2 / 3</b></div>
+    <div class="vopts">${v.options.map((o, i) => `<div class="vopt"><span class="fill" style="--h:${(v.counts[i] / total) * 100}%"></span>
+      <span class="l">${i + 1}</span><span class="t">${esc(o.replace("Nghe đoán nghĩa", "🎧 Nghe"))}</span><b>${v.counts[i]} phiếu</b></div>`).join("")}</div></div>`;
+}
+function renderBoard(s) {
+  const E = s.round_end;
+  if (E) {
+    return `<div class="card">
+        <div class="board-title">🏁 Kết thúc vòng ${E.no}<small>Bảng điểm của vòng này</small></div>
+        ${podium(E.podium)}
+      </div>
+      ${E.king ? `<div class="king">👑 Vua vòng ${E.no}: <b>${esc(E.king.name)}</b> · ${E.king.score} điểm · giữ vương miện cả vòng sau!</div>` : ""}`;
+  }
+  return `<div class="card">
+      <div class="board-title">🏆 Bảng xếp hạng<small>sau ${s.round} câu</small></div>
+      ${podium(s.top)}
+      ${s.vote ? "" : ranks(s.top.slice(3, 5), 4)}
+    </div>
+    ${s.vote ? renderVote(s.vote) : thanks(s)}`;
 }
 
 function renderIdle(s) {
-  if (SAFE()) return `<div class="idle card">
-      <div class="ko">한국어</div>
-      <div style="font-size:1.25em;font-weight:800">Đoán nghĩa từ tiếng Hàn</div>
-      <div class="sub">${esc(s.message && s.message !== "Tạm dừng" ? s.message : "Sắp bắt đầu, chờ chút nhé…")}</div>
-      <div>Comment <b>A / B / C / D</b> để trả lời${s.teams ? " · gõ <b>đội đỏ</b> / <b>đội xanh</b>" : ""}</div>
-    </div>`;
   return `<div class="idle card">
-      <div class="ko">한국어</div>
-      <div style="font-size:1.4em;font-weight:800">Đoán nghĩa từ tiếng Hàn</div>
-      <div class="sub">${esc(s.message && s.message !== "Tạm dừng" ? s.message : "Sắp bắt đầu, chờ chút nhé…")}</div>
-      <div>Comment <b>A / B / C / D</b> để trả lời.<br>Trả lời nhanh được thêm điểm, đúng liên tiếp có thưởng chuỗi.</div>
-      ${s.teams ? `<div>Gõ <b>đội đỏ</b> hoặc <b>đội xanh</b> để vào đội 🔴🔵</div>` : ""}
+      <div class="ko">한국어 LIVE</div>
+      <div class="big">Đoán nghĩa từ tiếng Hàn</div>
+      <div style="color:var(--muted);font-weight:800">${esc(s.message && s.message !== "Tạm dừng" ? s.message : "Sắp bắt đầu, chờ chút nhé…")}</div>
+      <div class="cta">COMMENT A / B / C / D ĐỂ CHƠI 👇</div>
     </div>`;
-}
-
-function renderGoals(s) {
-  const G = s.goals, out = [];
-  const g = (icon, x, text) => out.push(`<div class="goal"><i style="width:${x.progress * 100}%"></i><span>${icon} ${text}</span></div>`);
-  if (G.likes.goal) g("❤️", s.double_next ? { progress: 1 } : G.likes, s.double_next ? "x2 câu sau!" : `${G.likes.value}/${G.likes.goal}`);
-  else g("❤️", { progress: 0 }, String(s.likes));
-  if (G.diamonds.goal) g("💎", s.next_special === "boss" ? { progress: 1 } : G.diamonds, s.next_special === "boss" ? "Sắp có BOSS!" : `${G.diamonds.value}/${G.diamonds.goal} → BOSS`);
-  if (G.shares.goal) g("🔁", G.shares, `${G.shares.value}/${G.shares.goal} → x2`);
-  const t = s.teams;
-  if (SAFE() && t && (t.red.members || t.blue.members)) {   // vùng an toàn: điểm đội gộp vào cùng hàng
-    const r = t.red.score + t.blue.score ? (t.red.score / (t.red.score + t.blue.score)) * 100 : 50;
-    out.push(`<div class="goal team"><i style="width:${r}%"></i><span>🔴 ${t.red.score} · ${t.blue.score} 🔵</span></div>`);
-  }
-  return out.join("");
-}
-
-function renderTeams(t) {
-  if (SAFE() || !t || (!t.red.members && !t.blue.members)) return "";
-  const sum = Math.max(1, t.red.score + t.blue.score);
-  const r = t.red.score || t.blue.score ? (t.red.score / sum) * 100 : 50;
-  return `<div class="teams"><i style="width:${r}%"></i>
-    <span>🔴 Đỏ <b>${t.red.score}</b> <small>(${t.red.members})</small></span>
-    <span><small>(${t.blue.members})</small> <b>${t.blue.score}</b> Xanh 🔵</span></div>`;
 }
 
 /* ---------------------------------------------------------------- bot + khung căn chỉnh */
@@ -282,46 +318,77 @@ function renderGuide() {
   $("#guide").classList.remove("hidden");
 }
 
+/* ---------------------------------------------------------------- hiệu ứng khi trạng thái đổi */
+function transitions(s) {
+  const Q = s.question, P = prev;
+  prev = { phase: s.phase, qid: Q ? Q.id : 0, answered: Q ? Q.answered : 0, sec: Math.ceil(s.remaining) };
+  if (!P) return false;                          // lần đầu mở overlay: không bắn hiệu ứng cũ
+  let entered = false;
+  if (s.phase === "question" && Q && Q.id !== P.qid) {
+    entered = true;
+    sfx("whoosh");
+    const kind = Q.special === "final" ? "🏁 CHUNG KẾT VÒNG · x3" : Q.special === "boss" ? "👹 CÂU BOSS · x3"
+      : Q.listen ? "🎧 Câu nghe" : KIND[Q.mode] || "";
+    splash(Q.special === "final" ? "🏁" : `CÂU ${s.round_info && s.round_info.len ? s.round_info.q : s.round + 1}`, kind,
+      Q.special === "final" ? "final" : "");
+  }
+  if (s.phase === "question" && Q && Q.id === P.qid) {
+    if (Q.answered > P.answered) sfx("pop");
+    const sec = Math.ceil(s.remaining);
+    if (sec !== P.sec && sec >= 1 && sec <= 5) sfx("tick", sec <= 3);
+  }
+  if (s.phase === "reveal" && P.phase !== "reveal" && Q) {
+    entered = true;
+    if (Q.result && Q.result.correct) { sfx("ding"); if (Q.result.correct >= 3) confetti(30); } else sfx("buzz");
+  }
+  if (s.phase === "board" && P.phase !== "board") {
+    entered = true;
+    sfx("fanfare", !!s.round_end);
+    confetti(s.round_end ? 90 : 40);
+  }
+  if (s.phase !== P.phase && s.phase === "idle") entered = true;
+  return entered;
+}
+
 function render(s) {
   const first = cfg === null;
   cfg = s.config;
   if (first) rotateTip();
-  document.body.classList.toggle("safe", !!cfg.safe);
-  document.documentElement.style.setProperty("--st", cfg.safe_top);
-  document.documentElement.style.setProperty("--sb", cfg.safe_bottom);
+  // vùng an toàn tắt: dùng gần hết khung (vẫn chừa mép trên/dưới)
+  document.documentElement.style.setProperty("--st", cfg.safe ? cfg.safe_top : 3);
+  document.documentElement.style.setProperty("--sb", cfg.safe ? cfg.safe_bottom : 86);
+  document.body.classList.add("safe");
   renderGuide();
   renderBot(s.bot);
-  $("#viewers").textContent = "👀 " + s.viewers;
-  $("#players").textContent = "🙋 " + s.players;
-  $("#goals").innerHTML = renderGoals(s);
-  $("#teams").innerHTML = renderTeams(s.teams);
+  renderHud(s);
+  renderTicker(s);
+  const entered = transitions(s);
   const main = $("#main");
   $("#stage").dataset.phase = s.phase;
-  $("#stage").dataset.special = (s.question && s.question.special) || "";
-  $("#stage").dataset.mode = (s.question && s.question.mode) || "";
   if ((s.phase === "question" || s.phase === "reveal") && s.question) main.innerHTML = renderQuestion(s);
   else if (s.phase === "board") main.innerHTML = renderBoard(s);
   else main.innerHTML = renderIdle(s);
+  if (entered) {
+    main.classList.remove("enter"); void main.offsetWidth; main.classList.add("enter");
+    clearTimeout(render.t); render.t = setTimeout(() => main.classList.remove("enter"), 900);
+  }
 
-  // feed: chỉ thêm dòng mới; lần đầu mở overlay không bật lại thông báo cũ
-  const feed = $("#feed"), fresh = feedSeq >= 0;
+  // thông báo lớn: chỉ dòng mới; lần đầu mở overlay không bật lại thông báo cũ
+  const fresh = feedSeq >= 0;
   for (const f of s.feed) {
     if (f.seq <= feedSeq) continue;
     feedSeq = f.seq;
-    const d = document.createElement("div");
-    d.className = f.kind + (f.tier ? " t" + f.tier : ""); d.textContent = f.text; feed.appendChild(d);
     if (fresh && f.alert) pushAlert(f);
   }
   if (feedSeq < 0) feedSeq = 0;
-  while (feed.children.length > 3) feed.firstChild.remove();
 
-  // âm thanh: câu mới -> đọc đề; quà lớn -> đọc lại đề; hiện đáp án -> bản 2 luồng (Việt trái / Hàn phải)
+  // âm thanh: câu mới -> đọc đề (sau màn giới thiệu); quà lớn -> đọc lại đề; hiện đáp án -> bản 2 luồng
   const Q = s.question;
   if (Q) {
     const key = Q.id + ":" + s.phase + ":" + (s.phase === "question" ? Q.replay : 0);
     if (key !== last.sound) {
       last.sound = key;
-      if (s.phase === "question" && Q.audio_q) play(`/audio/${Q.word_id}/${Q.audio_q}.mp3`);
+      if (s.phase === "question" && Q.audio_q) setTimeout(() => play(`/audio/${Q.word_id}/${Q.audio_q}.mp3`), 700);
       else if (s.phase === "reveal") play(`/audio/${Q.word_id}/${Q.audio_reveal || "mix"}.mp3`);
     }
   }

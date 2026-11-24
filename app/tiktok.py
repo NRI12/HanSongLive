@@ -2,6 +2,7 @@
 game chỉ nhận dict đã chuẩn hoá (xem live.LiveGame.handle)."""
 import asyncio
 import logging
+import re
 
 log = logging.getLogger("hansong.tiktok")
 
@@ -13,7 +14,23 @@ def _user(u) -> dict | None:
     if not uid or uid == "0":
         return None
     name = getattr(u, "nickname", "") or getattr(u, "display_id", "") or uid
-    return {"id": uid[:100], "name": str(name)[:60]}
+    out = {"id": uid[:100], "name": str(name)[:60]}
+    av = _avatar(u)
+    if av:
+        out["avatar"] = av
+    return out
+
+
+_AVATAR_RE = re.compile(r"^https://[\w.-]+\.(?:tiktokcdn(?:-[\w]+)?\.com|ibyteimg\.com|byteimg\.com|muscdn\.com)/[^\s\"'<>]{1,600}$")
+
+
+def _avatar(u) -> str | None:
+    """Ảnh đại diện nhỏ của người xem. Chỉ nhận https từ CDN của TikTok, để overlay không tải link lạ."""
+    img = getattr(u, "avatar_thumb", None)
+    for url in (getattr(img, "url_list", None) or [])[:3]:
+        if isinstance(url, str) and _AVATAR_RE.match(url):
+            return url
+    return None
 
 
 def normalize(kind: str, ev) -> dict | None:

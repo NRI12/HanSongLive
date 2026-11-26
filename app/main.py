@@ -1,4 +1,4 @@
-"""HanSongLive: trò chơi đoán từ tiếng Hàn trên TikTok LIVE, lấy dữ liệu từ HanSong.
+"""HanSongLive: game "Săn Quái Chữ" tiếng Hàn trên TikTok LIVE (cả phòng comment A/B/C/D để đánh quái), lấy dữ liệu từ HanSong.
 
 Trang:
   /admin              bảng điều khiển (cần LIVE_PASSWORD nếu có đặt)
@@ -426,14 +426,14 @@ async def connect(body: ConnectReq):
 
 
 class GameReq(BaseModel):
-    action: str   # start | pause | skip | reset | boss | listen | double
+    action: str   # start | pause | skip | reset | boss | double | heart (+1 tim) | fast|stealth|armor|mirror|heal (đặc tính quái sau)
 
 
 @app.post("/api/game")
 def game(body: GameReq):
-    act = {"start": GAME.start, "pause": GAME.pause, "skip": GAME.skip, "reset": GAME.reset_scores,
-           "boss": lambda: GAME.queue("boss"), "listen": lambda: GAME.queue("listen"),
-           "double": lambda: GAME.queue("double")}.get(body.action)
+    act = {"start": GAME.start, "pause": GAME.pause, "skip": GAME.skip, "reset": GAME.reset_scores}.get(body.action)
+    if not act and body.action in ("boss", "double", "heart", *live.DOOR_TRAITS):
+        act = lambda: GAME.queue(body.action)   # noqa: E731
     if not act:
         raise HTTPException(400, "action không hợp lệ")
     act()
@@ -471,8 +471,8 @@ def stats():
 @app.get("/api/overlay/state")
 def overlay_state():
     boards = None
-    if GAME.phase == "board":
-        boards = {"all_time": live.all_time_top(1), "weekly": live.weekly_top(5), "weekly_fans": live.weekly_fans(3)}
+    if GAME.phase in ("clear", "fail"):
+        boards = {"weekly": live.weekly_top(3)}
     s = GAME.state(boards)
     s["connected"] = STATUS.get("state") == "connected"
     return s

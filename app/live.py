@@ -1,16 +1,22 @@
-"""Chế độ TikTok LIVE: người xem comment A/B/C/D để đoán nghĩa từ vựng.
+"""Chế độ TikTok LIVE "Săn Quái Chữ": cả phòng cùng đánh quái bằng cách comment A/B/C/D trả lời câu hỏi tiếng Hàn.
 
-Engine thuần (không phụ thuộc TikTok SDK). Mọi sự kiện đi vào qua `handle(event)` dưới dạng dict đã chuẩn hoá:
+Vòng lặp chính:
+  - Leo ải 1, 2, 3… mỗi ải 1 con quái. Cứ `boss_every` ải có 1 BOSS; hết boss thì sang vùng mới (đổi nền) và
+    ải đầu vùng là điểm hồi sinh.
+  - Mỗi câu = 1 lượt đánh. Ai trả lời đúng gây sát thương (= điểm cá nhân), người đúng đầu tiên được chí mạng.
+    Sát thương chỉ tính lúc hiện đáp án: đang hỏi mà máu quái tụt là lộ ai đúng.
+  - Có người trả lời mà dưới 50% đúng: quái phản đòn, cả phòng mất tim. Hết tim thì về điểm hồi sinh.
+  - Quái có đặc tính (TRAITS) đổi kiểu câu/thời gian/máu. Hạ quái xong cả phòng chọn 1 trong 3 cửa = đặc tính quái sau.
+  - Cấp độ + danh hiệu cá nhân tính từ tổng sát thương mọi thời đại (live_players.score).
+  - Tim đủ mốc: câu sau x2 sát thương. Chia sẻ đủ mốc: hồi 1 tim cho cả phòng.
+Quà tặng KHÔNG có tác dụng gì trong game (người dùng yêu cầu bỏ hẳn); chỉ ghi số kim cương vào DB để kiểm tra SDK.
+
+Engine thuần (không phụ thuộc TikTok SDK). Sự kiện vào qua `handle(event)` dạng dict đã chuẩn hoá:
   {"type": "comment"|"gift"|"like"|"join"|"follow"|"share"|"audience", "user": {"id", "name"}, ...}
 Đồng hồ được truyền vào để test được.
-
-Theo quy định TikTok: quà chỉ tạo hiệu ứng cố định cho cả phòng, KHÔNG BAO GIỜ quy ra điểm.
-  - mọi món quà: loại 1 đáp án sai của câu đang hỏi
-  - quà lớn (>= gift_big kim cương): thêm 10 giây cho câu đang hỏi + phát lại âm thanh
-  - quà rất lớn (>= gift_huge): tên người tặng hiện là "nhà tài trợ" của câu kế tiếp
-  - tổng kim cương cả phòng đủ gift_goal: câu kế tiếp là câu boss
 """
 import json
+import math
 import random
 import re
 import threading
@@ -24,19 +30,15 @@ from .norm import norm_ko, norm_vi
 LETTERS = "ABCD"
 
 DEFAULT_CONFIG = {
-    "question_s": 20,      # thời gian trả lời mỗi câu
-    "reveal_s": 8,         # thời gian hiện đáp án (phát âm thanh 2 luồng)
-    "board_every": 8,      # cứ N câu thì hiện bảng xếp hạng
-    "board_s": 10,
-    "like_goal": 300,      # đủ N tim -> câu kế tiếp nhân đôi điểm
-    "share_goal": 10,      # đủ N lượt chia sẻ -> câu kế tiếp nhân đôi điểm
-    "gift_goal": 300,      # tổng kim cương cả phòng đủ N -> câu kế tiếp là câu boss
-    "gift_big": 30,        # 1 lần tặng >= N kim cương -> +10 giây, phát lại âm thanh
-    "gift_huge": 100,      # 1 lần tặng >= N kim cương -> nhà tài trợ câu kế tiếp
-    "boss_every": 10,      # cứ N câu có 1 câu boss (x3 điểm, thời gian ngắn hơn). 0 = tắt
-    "listen_every": 5,     # cứ N câu có 1 câu nghe (chỉ phát âm, không hiện chữ). 0 = tắt
-    "teams": 1,            # bật đội Đỏ / Xanh
-    "vote": 1,             # bình chọn kiểu câu trong lúc hiện bảng xếp hạng
+    "question_s": 20,      # thời gian trả lời mỗi câu (= 1 lượt đánh)
+    "reveal_s": 7,         # hiện đáp án + hoạt cảnh ra đòn (phát âm thanh 2 luồng)
+    "clear_s": 12,         # màn hạ quái / thua (kèm bình chọn cửa)
+    "hearts": 5,           # số tim chung của cả phòng
+    "turns": 4,            # số câu ước tính để hạ 1 quái thường (máu quái tính theo số người đang chơi)
+    "boss_every": 5,       # cứ N ải có 1 boss, cũng là độ dài 1 vùng / điểm hồi sinh. 0 = không có boss
+    "like_goal": 300,      # đủ N tim -> câu kế tiếp x2 sát thương
+    "share_goal": 10,      # đủ N lượt chia sẻ -> hồi 1 tim cho cả phòng
+    "vote": 1,             # hạ quái xong: bình chọn 1 trong 3 cửa (đặc tính quái kế tiếp)
     "live_counts": 1,      # hiện số người chọn từng đáp án ngay trong lúc hỏi
     "safe": 1,             # dồn nội dung vào vùng an toàn, chừa chỗ cho giao diện TikTok (comment, ô nhập, tên host)
     "safe_top": 12,        # % chiều cao phía trên dành cho TikTok (tên host, số người xem)
@@ -44,34 +46,56 @@ DEFAULT_CONFIG = {
     "bot": 1,              # bot linh vật Hami
     "bot_ai": 1,           # người xem gõ "bot ..." để hỏi, AI trả lời
     "bot_voice": 1,        # Hami đọc to câu thoại bằng giọng dễ thương (OpenAI TTS, cần OpenAI key)
-    "round_len": 20,       # mỗi vòng N câu; câu cuối là "chung kết vòng" (x3), xong vinh danh Vua vòng. 0 = tắt
-    "sfx": 1,              # hiệu ứng âm thanh trên overlay (tích tắc, ting, reo hò…)
-    "support_every": 12,   # cứ N câu Hami mời thả tim / follow / ủng hộ kênh 1 lần (nói thật, không đổi quà lấy điểm). 0 = tắt
+    "sfx": 1,              # hiệu ứng âm thanh trên overlay (đấm, chém, tích tắc…)
+    "support_every": 12,   # cứ N câu Hami mời thả tim / follow / share 1 lần. 0 = tắt
     "source": "all",       # nguồn từ: all | today | due | hard | new | mastered
     "mode": "all",         # ko2vi | vi2ko | mix (2 kiểu trên) | cloze | trans | hanviet | all (trộn mọi kiểu đang có)
 }
-LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "board_every": (0, 50), "board_s": (4, 30),
-          "like_goal": (0, 100000), "share_goal": (0, 10000), "gift_goal": (0, 1000000),
-          "gift_big": (1, 1000000), "gift_huge": (1, 1000000), "boss_every": (0, 100), "listen_every": (0, 100),
-          "teams": (0, 1), "vote": (0, 1), "live_counts": (0, 1), "safe": (0, 1), "safe_top": (0, 30),
-          "safe_bottom": (40, 100), "bot": (0, 1), "bot_ai": (0, 1), "bot_voice": (0, 1),
-          "support_every": (0, 100), "round_len": (0, 100), "sfx": (0, 1)}
+LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "clear_s": (4, 40), "hearts": (1, 20), "turns": (1, 20),
+          "boss_every": (0, 50), "like_goal": (0, 100000), "share_goal": (0, 10000), "vote": (0, 1),
+          "live_counts": (0, 1), "safe": (0, 1), "safe_top": (0, 30), "safe_bottom": (40, 100), "bot": (0, 1),
+          "bot_ai": (0, 1), "bot_voice": (0, 1), "support_every": (0, 100), "sfx": (0, 1)}
 SOURCES = ("all", "today", "due", "hard", "new", "mastered")
 MODES = ("ko2vi", "vi2ko", "mix", "cloze", "trans", "hanviet", "all")
 KINDS = ("ko2vi", "vi2ko", "cloze", "trans", "hanviet")   # các kiểu câu thật sự
 BLANK = "＿＿＿"
-SPECIALS = ("boss", "listen")
-BOSS_MULT = 3
-EXTRA_S = 10           # quà lớn cộng thêm bao nhiêu giây
-EXTRA_MAX = 30         # tối đa cộng thêm cho 1 câu
-TEAMS = {"red": "Đỏ", "blue": "Xanh"}
-TEAM_ICON = {"red": "🔴", "blue": "🔵"}
-VOTE_OPTS = [("ko2vi", "Hàn → Việt"), ("vi2ko", "Việt → Hàn"), ("listen", "Nghe đoán nghĩa")]
+
+# ---------------------------------------------------------------- quái, vùng, cấp độ
+TRAITS = {
+    "fast": {"icon": "⚡", "name": "Nhanh nhẹn", "desc": "ít thời gian hơn"},
+    "stealth": {"icon": "👻", "name": "Tàng hình", "desc": "chỉ nghe, không thấy chữ"},
+    "armor": {"icon": "🛡", "name": "Giáp dày", "desc": "máu x1.5"},
+    "mirror": {"icon": "🪞", "name": "Đảo ngược", "desc": "hỏi Việt → Hàn"},
+    "heal": {"icon": "💚", "name": "Tự hồi máu", "desc": "hồi máu khi bị đánh trượt"},
+    "rage": {"icon": "🔥", "name": "Cuồng nộ", "desc": "phản đòn mất 2 tim"},
+}
+DOOR_TRAITS = ("fast", "stealth", "armor", "mirror", "heal")
+FAST_MULT = 0.65
+BOSS_HP = 2.0         # boss nhiều máu gấp N quái thường
+ZONES = (("forest", "Rừng Từ Vựng"), ("desert", "Sa Mạc Ngữ Pháp"), ("castle", "Lâu Đài Kính Ngữ"),
+         ("talltrees", "Rừng Cổ Thụ"))
+MON_KIND = ("Quái", "Yêu tinh", "Quỷ con", "Ma")
+MON_ADJ = ("Quên Từ", "Sai Chính Tả", "Lười Học", "Nói Ngọng", "Ham Ngủ", "Mắt Lồi", "Cáu Kỉnh", "Ăn Vụng",
+           "Răng Sún", "Lắm Mồm", "Đãng Trí", "Phát Âm Sai", "Bỏ Bài", "Ngủ Gật")
+BOSS_NAMES = ("Đại Vương Quên Từ", "Chúa Tể Ngữ Pháp", "Vua Đãng Trí", "Trùm Phát Âm Sai", "Bạo Chúa Kính Ngữ",
+              "Ma Vương Bỏ Bài")
+DMG_PER_PLAYER = 11    # sát thương trung bình 1 người/câu (≈60% đúng × ~18 điểm), dùng để tính máu quái
+TITLES = ((20, "👑", "Huyền thoại"), (15, "⭐", "Anh hùng"), (10, "🔮", "Pháp sư"), (6, "🛡", "Hiệp sĩ"),
+          (3, "🗡", "Kiếm sĩ"), (1, "🌱", "Tân binh"))
+
+
+def level_of(total: int) -> int:
+    """Cấp độ từ tổng sát thương mọi thời đại: 40 → cấp 2, 160 → 3, 360 → 4, 640 → 5…"""
+    return 1 + int(math.sqrt(max(0, total) / 40))
+
+
+def title_of(lv: int) -> tuple[str, str]:
+    return next((icon, name) for m, icon, name in TITLES if lv >= m)
 
 
 def clean_config(raw: dict, base: dict | None = None) -> dict:
     cfg = dict(DEFAULT_CONFIG)
-    cfg.update(base or {})
+    cfg.update({k: v for k, v in (base or {}).items() if k in DEFAULT_CONFIG})
     for k, v in (raw or {}).items():
         if k in LIMITS:
             try:
@@ -83,8 +107,6 @@ def clean_config(raw: dict, base: dict | None = None) -> dict:
             cfg[k] = v
         elif k == "mode" and v in MODES:
             cfg[k] = v
-    if cfg["gift_huge"] < cfg["gift_big"]:
-        cfg["gift_huge"] = cfg["gift_big"]
     return cfg
 
 
@@ -94,8 +116,7 @@ def week_key(t: float) -> str:
 
 # ---------------------------------------------------------------- answer parsing
 _LETTER_RE = re.compile(r"^(?:đáp án|dap an|đáp|chọn|chon|câu|cau)?\s*([a-d1-4])\s*[\.\!\)\s]*$", re.I)
-_TEAM_RE = re.compile(r"^(?:doi|team|#)\s*(do|red|xanh|blue)$")
-_VOTE_RE = re.compile(r"^(?:so|chon|vote|#)?\s*([1-3])\s*[\.\!\s]*$")
+_VOTE_RE = re.compile(r"^(?:cua|so|chon|vote|#)?\s*([1-3])\s*[\.\!\s]*$")
 
 
 def plain(s: str) -> str:
@@ -130,14 +151,7 @@ def parse_answer(text: str, options: list[str], lang: str) -> int | None:
 
 
 def is_score_cmd(text: str) -> bool:
-    return norm_vi(text) in ("điểm", "diem", "top", "hạng", "hang", "điểm của tôi")
-
-
-def parse_team(text: str) -> str | None:
-    m = _TEAM_RE.match(plain(text))
-    if not m:
-        return None
-    return "red" if m.group(1) in ("do", "red") else "blue"
+    return norm_vi(text) in ("điểm", "diem", "top", "hạng", "hang", "điểm của tôi", "cấp", "cap", "level")
 
 
 def parse_vote(text: str) -> int | None:
@@ -281,28 +295,37 @@ class LiveGame:
         self.persist = persist
         self.lock = threading.RLock()
         self.cfg = dict(DEFAULT_CONFIG)
-        self.phase = "idle"          # idle | question | reveal | board
+        self.phase = "idle"          # idle | question | reveal | clear (hạ quái) | fail (cả phòng bị hạ)
         self.phase_end = 0.0
         self.qid = 0
         self.q: dict | None = None
-        self.q_duration = 0          # thời lượng câu hiện tại (đã tính câu boss + giây cộng thêm)
-        self.extra = 0               # số giây quà đã cộng cho câu hiện tại
-        self.replay = 0              # tăng lên = overlay phát lại âm thanh đề
+        self.q_duration = 0
         self.q_comments = 0          # số comment nhận được trong lúc hỏi câu này
-        self.special: str | None = None       # boss | listen | None
-        self.queued: deque = deque(maxlen=3)  # vòng đặc biệt đã xếp hàng (admin, mục tiêu quà)
-        self.sponsor: str | None = None
-        self.sponsors: deque = deque(maxlen=5)
-        self.answers: dict[str, dict] = {}    # user_id -> {idx, at, correct, points}
-        self.hints: list[int] = []            # các đáp án sai đã bị loại
-        self.double = False                   # câu hiện tại x2
+        self.special: str | None = None       # listen (quái tàng hình) | None
+        self.answers: dict[str, dict] = {}    # user_id -> {idx, at, correct, points, crit}
+        self.double = False                   # câu hiện tại x2 sát thương (mốc tim)
         self.double_next = False
         self.rounds = 0
         self.recent: deque = deque(maxlen=40)
-        self.players: dict[str, dict] = {}    # điểm trong phiên live
-        self.teams = {k: {"score": 0, "members": 0} for k in TEAMS}
-        self.vote: dict | None = None         # đang mở bình chọn: {"counts": [..], "voters": set()}
-        self.vote_mode: str | None = None     # kết quả bình chọn, áp dụng tới lần hiện bảng kế tiếp
+        self.players: dict[str, dict] = {}    # người chơi trong phiên live
+        # --- săn quái
+        self.floor = 1
+        self.monster: dict | None = None
+        self.pending: int | None = None       # ải sẽ sinh quái ở câu kế tiếp (sau khi hạ quái / thua)
+        self.refill = False                   # câu kế tiếp hồi đầy tim (sau khi thua)
+        self.hearts = DEFAULT_CONFIG["hearts"]
+        self.mon_dmg: dict[str, int] = {}     # sát thương từng người lên quái hiện tại
+        self.after: str | None = None         # sau màn đáp án: clear | fail | None
+        self.outcome: dict | None = None      # dữ liệu màn hạ quái / thua
+        self.next_trait: str | None = None    # kết quả bình chọn cửa
+        self.force_boss = False               # admin gọi boss cho quái kế tiếp
+        self.force_trait: str | None = None   # admin chọn đặc tính quái kế tiếp (thắng kết quả bình chọn)
+        self.active: deque = deque(maxlen=3)  # tập người trả lời ở 3 câu gần nhất -> tính máu quái
+        self.kills = 0
+        self.best_floor = 0                   # ải cao nhất từng hạ (kỷ lục của kênh)
+        self.king_uid: str | None = None      # MVP con quái vừa hạ: đội vương miện
+        self.vote: dict | None = None         # đang mở bình chọn cửa: {"doors": [...], "counts", "voters"}
+        # --- tương tác
         self.feed: deque = deque(maxlen=12)
         self.feed_seq = 0
         self.likes = 0
@@ -310,7 +333,6 @@ class LiveGame:
         self.shares = 0
         self.share_mark = 0
         self.diamonds = 0
-        self.diamond_mark = 0
         self.follows = 0
         self.viewers = 0
         self.last_join = 0.0
@@ -320,7 +342,6 @@ class LiveGame:
         self.bot_lines: deque = deque(maxlen=8)   # câu thoại của bot cho overlay: {seq, text, mood, at}
         self.bot_seq = 0
         self.bot_last = -1e9
-        self.bot_join_at = -1e9
         self.hurried = False
         self.bot_asks: deque = deque(maxlen=3)   # câu người xem hỏi bot, main.py lấy ra gọi AI
         self.bot_cool: dict[str, float] = {}     # user_id -> lần hỏi bot gần nhất
@@ -328,12 +349,13 @@ class LiveGame:
         self.ai_down = ""                        # "" | credit | key: API AI hỏng thật (main.py báo vào)
         self.greet_buf: list[dict] = []          # người mới vào phòng chờ được Hami chào (gom nhóm)
         self.greet_at = -1e9
-        self.recent_ans: deque = deque(maxlen=6)   # dải "vừa trả lời" trên overlay
-        self.round_no = 1                        # vòng hiện tại (round_len câu / vòng)
-        self.round_q = 0                         # số câu đã hỏi trong vòng
-        self.round_end: dict | None = None       # đang vinh danh cuối vòng: {no, podium, king}
-        self.king_uid: str | None = None         # Vua vòng trước: đội vương miện
+        self.recent_ans: deque = deque(maxlen=6)   # dải "vừa ra đòn" trên overlay
         self.ai_off_at = -1e9
+        if persist:
+            try:
+                self.best_floor = int(db.get_conf("best_floor", 0) or 0)
+            except Exception:
+                self.best_floor = 0
 
     # -------------------------------------------------------- helpers
     def _push(self, kind: str, text: str, **extra):
@@ -387,9 +409,16 @@ class LiveGame:
         uid = str(user["id"])
         p = self.players.get(uid)
         if not p:
+            base = 0
+            if self.persist:
+                try:
+                    row = db.q1("SELECT score FROM live_players WHERE user_id=?", (uid,))
+                    base = int(row["score"]) if row else 0
+                except Exception:
+                    base = 0
             p = self.players[uid] = {"id": uid, "name": user.get("name") or uid, "score": 0, "correct": 0,
                                      "answered": 0, "streak": 0, "best_streak": 0, "gifts": 0, "diamonds": 0,
-                                     "team": None, "round_score": 0, "avatar": None}
+                                     "avatar": None, "base": base, "level": level_of(base)}
         if user.get("name"):
             p["name"] = user["name"][:40]
         if user.get("avatar"):
@@ -404,19 +433,36 @@ class LiveGame:
         return 0
 
     def _goal(self, total: int, mark: int, goal: int) -> tuple[bool, int]:
-        """(đạt mốc?, mark mới). Dùng chung cho tim, chia sẻ, kim cương."""
+        """(đạt mốc?, mark mới). Dùng chung cho tim, chia sẻ."""
         if goal and total - mark >= goal:
             return True, total - (total - mark) % goal
         return False, mark
+
+    def _every(self) -> int:
+        """Độ dài 1 vùng (số ải). boss_every=0 vẫn đổi vùng mỗi 5 ải."""
+        return self.cfg["boss_every"] or 5
+
+    def _checkpoint(self, floor: int) -> int:
+        return (floor - 1) // self._every() * self._every() + 1
+
+    def _is_boss_floor(self, floor: int) -> bool:
+        return bool(self.cfg["boss_every"]) and floor % self.cfg["boss_every"] == 0
+
+    def _brief(self, p: dict, **extra) -> dict:
+        icon, title = title_of(p["level"])
+        return {"name": p["name"], "avatar": p["avatar"], "level": p["level"], "title": title, "icon": icon, **extra}
 
     # -------------------------------------------------------- control
     def configure(self, raw: dict):
         with self.lock:
             self.cfg = clean_config(raw, self.cfg)
+            self.hearts = min(self.hearts, self.cfg["hearts"])
 
     def start(self):
         with self.lock:
             if self.phase == "idle":
+                if self.monster is None:
+                    self.hearts = self.cfg["hearts"]
                 self._next_question()
 
     def pause(self):
@@ -430,37 +476,50 @@ class LiveGame:
         with self.lock:
             if self.phase == "question":
                 self._reveal()
+            elif self.phase == "reveal":
+                self._after_reveal()
             else:
                 self._next_question()
 
     def queue(self, kind: str) -> bool:
-        """Admin ép vòng đặc biệt cho câu kế tiếp: boss | listen | double."""
+        """Admin tạo cao trào: boss (quái kế tiếp là boss) | double (câu sau x2) | heart (+1 tim)
+        | một đặc tính trong DOOR_TRAITS (quái kế tiếp mang đặc tính đó, vd. stealth = câu nghe)."""
         with self.lock:
-            if kind == "double":
+            if kind in DOOR_TRAITS:
+                self.force_trait = kind
+                t = TRAITS[kind]
+                self._push("system", f"{t['icon']} Quái kế tiếp: {t['name']} ({t['desc']})")
+            elif kind == "double":
                 self.double_next = True
-                self._push("system", "⚡ Câu tiếp theo nhân đôi điểm!", alert=True)
-                return True
-            if kind not in SPECIALS:
+                self._push("system", "⚡ Câu tiếp theo x2 sát thương!", alert=True)
+            elif kind == "boss":
+                self.force_boss = True
+                self._push("system", "👹 Con quái kế tiếp là BOSS!", alert=True)
+            elif kind == "heart":
+                self.hearts = min(self.cfg["hearts"], self.hearts + 1)
+                self._push("system", "💖 Hồi 1 tim cho cả phòng!", alert=True)
+            else:
                 return False
-            self.queued.append(kind)
-            self._push("system", "👹 Sắp có CÂU BOSS x3 điểm!" if kind == "boss" else "🎧 Sắp có CÂU NGHE!",
-                       alert=True)
             return True
 
     def reset_scores(self):
+        """Làm lại từ ải 1, xoá điểm phiên (điểm mọi thời đại + kỷ lục vẫn giữ). Dừng game, bấm Bắt đầu để chơi lại."""
         with self.lock:
             self.players.clear()
             self._saved.clear()
             self.rounds = 0
             self.likes = self.like_mark = 0
             self.shares = self.share_mark = 0
-            self.diamonds = self.diamond_mark = 0
-            self.follows = 0
-            self.double_next = False
-            self.teams = {k: {"score": 0, "members": 0} for k in TEAMS}
-            self.vote_mode = None
-            self.round_no, self.round_q, self.round_end, self.king_uid = 1, 0, None, None
+            self.diamonds = self.follows = self.kills = 0
+            self.double_next = self.double = self.force_boss = False
+            self.force_trait = None
+            self.floor, self.monster, self.pending, self.refill = 1, None, None, False
+            self.hearts = self.cfg["hearts"]
+            self.mon_dmg, self.after, self.outcome, self.next_trait, self.king_uid = {}, None, None, None, None
+            self.active.clear()
             self.recent_ans.clear()
+            self.phase, self.q, self.vote = "idle", None, None
+            self.message = "Đã làm mới: bắt đầu lại từ ải 1"
             self._push("system", "Đã xoá bảng điểm phiên này")
 
     def _greet(self):
@@ -481,105 +540,133 @@ class LiveGame:
         else:
             self._bot("greetN", a=names[-1], b=names[-2], n=len(names) - 2)
 
-    def _end_round(self):
-        """Hết câu chung kết: vinh danh top 3 của vòng, Vua vòng có vương miện tới hết vòng sau."""
-        order = sorted((p for p in self.players.values() if p["round_score"] > 0),
-                       key=lambda p: (-p["round_score"], p["name"]))
-        podium = [{"name": p["name"], "avatar": p["avatar"], "score": p["round_score"]} for p in order[:3]]
-        king = order[0] if order else None
-        self.king_uid = king["id"] if king else None
-        self.round_end = {"no": self.round_no, "podium": podium, "king": podium[0] if podium else None}
-        self.vote = None
-        self.phase = "board"
-        self.phase_end = self.clock() + self.cfg["board_s"] + 4
-        if king:
-            self._bot("round_king", name=king["name"], no=self.round_no, score=king["round_score"])
+    # -------------------------------------------------------- quái
+    def _spawn(self, floor: int):
+        boss = self.force_boss or self._is_boss_floor(floor)
+        self.force_boss = False
+        if boss:
+            traits = ["rage", random.choice(DOOR_TRAITS)]
+        elif self.force_trait or self.next_trait:
+            traits = [self.force_trait or self.next_trait]
+        elif floor == 1:
+            traits = []
         else:
-            self._bot("round_none", no=self.round_no)
+            traits = [random.choice(DOOR_TRAITS)]
+        self.next_trait = self.force_trait = None
+        active = len(set().union(*self.active)) if self.active else 0
+        hp = max(30, max(1, active) * DMG_PER_PLAYER * self.cfg["turns"] * (1 + 0.04 * (floor - 1)))
+        if "armor" in traits:
+            hp *= 1.5
+        if boss:
+            hp *= BOSS_HP
+        hp = int(round(hp / 10)) * 10
+        zone_id, zone_name = ZONES[(floor - 1) // self._every() % len(ZONES)]
+        name = random.choice(BOSS_NAMES) if boss else f"{random.choice(MON_KIND)} {random.choice(MON_ADJ)}"
+        self.floor = floor
+        self.monster = {"floor": floor, "name": name, "boss": boss, "traits": traits, "hp": hp, "max_hp": hp,
+                        "seed": random.randrange(1 << 30), "zone": zone_id, "zone_name": zone_name}
+        self.mon_dmg = {}
+        self._bot("spawn_boss" if boss else "spawn", mon=name, floor=floor)
 
     def _close_vote(self):
         v, self.vote = self.vote, None
         if not v:
             return
         total = sum(v["counts"])
-        if not total:
-            self.vote_mode = None
-            return
-        i = max(range(len(VOTE_OPTS)), key=lambda j: v["counts"][j])
-        self.vote_mode = VOTE_OPTS[i][0]
-        self._push("vote", f"🗳 Khán giả chọn: {VOTE_OPTS[i][1]} ({v['counts'][i]}/{total} phiếu)", alert=True)
+        best = max(v["counts"])
+        i = random.choice([j for j, c in enumerate(v["counts"]) if c == best])
+        self.next_trait = v["doors"][i]
+        if total and not self.force_trait:      # admin đã chọn đặc tính thì không báo kết quả bình chọn
+            t = TRAITS[self.next_trait]
+            self._push("vote", f"🚪 Cả phòng chọn cửa {i + 1}: {t['icon']} {t['name']} ({v['counts'][i]}/{total} phiếu)",
+                       alert=True)
 
     def _next_question(self):
         self._close_vote()
-        if self.round_end:                    # vừa vinh danh xong: sang vòng mới
-            self.round_end = None
-            self.round_no += 1
-            self.round_q = 0
-            for p in self.players.values():
-                p["round_score"] = 0
-        n = self.qid + 1
-        special = None
-        final = bool(self.cfg["round_len"]) and self.round_q + 1 >= self.cfg["round_len"]
-        if final:
-            special = "final"
-        elif self.queued:
-            special = self.queued.popleft()
-        elif self.cfg["boss_every"] and n % self.cfg["boss_every"] == 0:
-            special = "boss"
-        elif self.vote_mode == "listen" or (self.cfg["listen_every"] and n % self.cfg["listen_every"] == 0):
-            special = "listen"
+        if self.refill:
+            self.refill = False
+            self.hearts = self.cfg["hearts"]
+        spawned = False
+        if self.monster is None or self.pending:
+            self._spawn(self.pending or self.floor)
+            self.pending = None
+            spawned = True
+        m = self.monster
+        special = "listen" if "stealth" in m["traits"] else None
         pcfg = dict(self.cfg)
-        if special == "listen":
-            pcfg["mode"] = "ko2vi"          # câu nghe: phát tiếng Hàn, chọn nghĩa Việt
-        elif self.vote_mode in ("ko2vi", "vi2ko"):
-            pcfg["mode"] = self.vote_mode
+        if special:
+            pcfg["mode"] = "ko2vi"          # quái tàng hình: phát tiếng Hàn, chọn nghĩa Việt
+        elif "mirror" in m["traits"]:
+            pcfg["mode"] = "vi2ko"
         q = self.picker(set(self.recent), pcfg)
         if not q:
             self.phase, self.q = "idle", None
             self.message = "Cần ít nhất 2 từ có âm thanh trong nguồn từ đã chọn"
             return
-        self.qid = n
+        self.qid += 1
         self.q = q
         self.special = special
-        self.round_q += 1
         self.recent_ans.clear()
         self.recent.append(q["word_id"])
         self.answers = {}
-        self.hints = []
-        self.extra = 0
-        self.replay = 0
         self.q_comments = 0
         self.double, self.double_next = self.double_next, False
-        self.sponsor = self.sponsors.popleft() if self.sponsors else None
         self.last_result = None
+        self.after = None
+        self.outcome = None
         self.message = ""
         self.phase = "question"
         dur = self.cfg["question_s"]
-        if special in ("boss", "final"):
-            dur = max(8, round(dur * 0.6))
+        if "fast" in m["traits"]:
+            dur = max(8, round(dur * FAST_MULT))
         self.q_duration = dur
         self.phase_end = self.clock() + dur
         self.hurried = False
-        if self.sponsor:
-            self._bot("q_sponsor", name=self.sponsor)
-        elif special in SPECIALS or special == "final":
-            self._bot("q_" + special)
+        if spawned:
+            return                          # vừa nói câu "quái xuất hiện"
+        if special:
+            self._bot("q_listen")
         elif q["mode"] in ("cloze", "trans", "hanviet"):
             self._bot("q_" + q["mode"])
         else:
-            self._bot("q")
+            self._bot("q", mon=m["name"])
 
     def _reveal(self):
-        q = self.q
+        q, m = self.q, self.monster
         counts = [0] * len(q["options"])
         for a in self.answers.values():
             counts[a["idx"]] += 1
         winners = sorted((a for a in self.answers.values() if a["correct"]), key=lambda a: a["at"])
+        hp_before = m["hp"]
+        hits, killer, leveled = [], None, []
+        for a in winners:
+            p = self.players[a["uid"]]
+            if m["hp"] > 0 and killer is None and m["hp"] - a["points"] <= 0:
+                killer = p
+            m["hp"] = max(0, m["hp"] - a["points"])
+            self.mon_dmg[a["uid"]] = self.mon_dmg.get(a["uid"], 0) + a["points"]
+            hits.append(self._brief(p, dmg=a["points"], crit=a["crit"]))
+            lv = level_of(p["base"] + p["score"])
+            if lv > p["level"]:
+                leveled.append((p, title_of(lv) != title_of(p["level"])))
+                p["level"] = lv
+        total = len(self.answers)
+        killed = m["hp"] <= 0
+        attack, healed = None, 0
+        if total and not killed and len(winners) / total < 0.5:
+            lose = 2 if "rage" in m["traits"] else 1
+            self.hearts = max(0, self.hearts - lose)
+            attack = {"hearts": lose}
+            if "heal" in m["traits"]:
+                healed = min(m["max_hp"] - m["hp"], round(m["max_hp"] * 0.15))
+                m["hp"] += healed
+        if total:
+            self.active.append(set(self.answers))
         self.last_result = {
-            "counts": counts,
-            "total": len(self.answers),
-            "correct": len(winners),
-            "fastest": [{"name": self.players[a["uid"]]["name"], "points": a["points"]} for a in winners[:3]],
+            "counts": counts, "total": total, "correct": len(winners),
+            "hits": hits[:8], "more": max(0, len(hits) - 8), "dmg": sum(h["dmg"] for h in hits),
+            "hp_before": hp_before, "hp_after": m["hp"], "killed": killed, "attack": attack, "healed": healed,
+            "last_hit": self._brief(killer) if killer else None,
         }
         self.rounds += 1
         self.phase = "reveal"
@@ -588,21 +675,94 @@ class LiveGame:
             if self.answers:
                 self._save([self.players[u] for u in self.answers])
             self._log_round(len(winners))
-        total = len(self.answers)
-        if not total:
+        for p, new_title in leveled:
+            icon, title = title_of(p["level"])
+            self._push("level", f"⬆️ {p['name']} lên cấp {p['level']}" + (f" · {icon} {title}!" if new_title else ""),
+                       alert=new_title, tier=2)
+        if killed:
+            self.after = "clear"
+            self._kill(killer)
+        elif self.hearts <= 0:
+            self.after = "fail"
+            self._fail()
+        elif attack:
+            self._bot("hit_room", lose=attack["hearts"], hearts=self.hearts)
+        elif not total:
             self._bot("reveal_none")
+        elif leveled:
+            p = leveled[-1][0]
+            self._bot("levelup", name=p["name"], lv=p["level"], title=title_of(p["level"])[1])
         else:
-            pct = round(100 * len(winners) / total)
-            name = self.players[winners[0]["uid"]]["name"] if winners else ""
-            kind = "reveal_zero" if not winners else "reveal_low" if pct < 40 else "reveal_mid" if pct < 80 \
-                else "reveal_high"
-            self._bot(kind, pct=pct, name=name)
+            first = hits[0]
+            self._bot("reveal_crit" if random.random() < .5 else "reveal_hit", name=first["name"],
+                      dmg=self.last_result["dmg"], hp=m["hp"])
         for line in self.bot_hold:
             self._bot_raw(line["text"], line["mood"])
         self.bot_hold = []
         every = self.cfg["support_every"]
-        if every and self.rounds % every == 0:
+        if every and self.rounds % every == 0 and not killed:
             self._bot("support")
+
+    def _mvp(self) -> list[dict]:
+        order = sorted(self.mon_dmg.items(), key=lambda kv: (-kv[1], self.players[kv[0]]["name"]))
+        return [self._brief(self.players[uid], dmg=d, uid=uid) for uid, d in order[:3]]
+
+    def _kill(self, killer: dict | None):
+        m = self.monster
+        mvp = self._mvp()
+        self.king_uid = mvp[0].pop("uid") if mvp else None
+        for x in mvp:
+            x.pop("uid", None)
+        self.kills += 1
+        record = m["floor"] > self.best_floor
+        if record:
+            self.best_floor = m["floor"]
+            if self.persist:
+                try:
+                    db.set_conf("best_floor", self.best_floor)
+                except Exception as e:
+                    self._push("system", f"Lỗi lưu kỷ lục: {e}")
+        nxt = m["floor"] + 1
+        self.pending = nxt
+        self.outcome = {"kind": "clear", "floor": m["floor"], "name": m["name"], "boss": m["boss"], "mvp": mvp,
+                        "last_hit": self._brief(killer) if killer else None, "record": record,
+                        "next_floor": nxt, "next_boss": self._is_boss_floor(nxt) or self.force_boss,
+                        "new_zone": (nxt - 1) % self._every() == 0}
+        self._push("clear", f"{'👑' if m['boss'] else '⚔️'} Đã hạ {m['name']}! Qua ải {m['floor']}", alert=True,
+                   tier=3 if m["boss"] else 2)
+        if record and m["floor"] > 1:
+            self._push("record", f"🏆 KỶ LỤC MỚI: ải {m['floor']}!", alert=True, tier=3)
+            self._bot("record", floor=m["floor"])
+        elif killer:
+            self._bot("kill_boss" if m["boss"] else "kill", mon=m["name"], name=killer["name"],
+                      mvp=mvp[0]["name"] if mvp else killer["name"])
+
+    def _fail(self):
+        m = self.monster
+        mvp = self._mvp()
+        for x in mvp:
+            x.pop("uid", None)
+        back = self._checkpoint(m["floor"])
+        self.pending = back
+        self.refill = True
+        self.outcome = {"kind": "fail", "floor": m["floor"], "name": m["name"], "boss": m["boss"], "mvp": mvp,
+                        "back_to": back}
+        self._push("fail", f"💀 Cả phòng bị {m['name']} hạ gục! Quay về ải {back}", alert=True, tier=2)
+        self._bot("fail", mon=m["name"], back=back)
+
+    def _after_reveal(self):
+        if self.after == "clear":
+            self.phase = "clear"
+            self.phase_end = self.clock() + self.cfg["clear_s"]
+            nxt = self.outcome["next_floor"]
+            if self.cfg["vote"] and not self.outcome["next_boss"]:
+                self.vote = {"doors": random.sample(DOOR_TRAITS, 3), "counts": [0, 0, 0], "voters": set()}
+                self._bot("door_vote", floor=nxt)
+        elif self.after == "fail":
+            self.phase = "fail"
+            self.phase_end = self.clock() + max(4, self.cfg["clear_s"] - 4)
+        else:
+            self._next_question()
 
     def tick(self):
         with self.lock:
@@ -616,21 +776,8 @@ class LiveGame:
             if self.phase == "question":
                 self._reveal()
             elif self.phase == "reveal":
-                every = self.cfg["board_every"]
-                if self.special == "final" and self.players:
-                    self._end_round()
-                elif every and self.rounds % every == 0 and self.players:
-                    self.phase = "board"
-                    self.phase_end = self.clock() + self.cfg["board_s"]
-                    if self.cfg["vote"]:
-                        self.vote = {"counts": [0] * len(VOTE_OPTS), "voters": set()}
-                        self._bot("board_vote")
-                    else:
-                        lead = min(self.players.values(), key=lambda p: (-p["score"], p["name"]))
-                        self._bot("board", name=lead["name"])
-                else:
-                    self._next_question()
-            elif self.phase == "board":
+                self._after_reveal()
+            elif self.phase in ("clear", "fail"):
                 self._next_question()
 
     # -------------------------------------------------------- events
@@ -654,7 +801,7 @@ class LiveGame:
                 now = self.clock()
                 if now - self.last_join >= 4:      # phòng đông: không để lượt vào phòng lấp hết feed
                     self.last_join = now
-                    self._push("join", f"👋 Chào {name}! Comment A/B/C/D để chơi")
+                    self._push("join", f"👋 Chào {name}! Comment A/B/C/D để đánh quái")
                 uid = str(user["id"])
                 if len(self.greet_buf) < 30 and all(g["uid"] != uid for g in self.greet_buf):
                     self.greet_buf.append({"uid": uid, "name": name})
@@ -670,9 +817,9 @@ class LiveGame:
             self.q_comments += 1
         if is_score_cmd(text):
             p = self._player(user)
-            team = f" · đội {TEAMS[p['team']]}" if p["team"] else ""
-            self._push("score", f"📊 {p['name']}: {p['score']} điểm · hạng {self._rank(p['id'])} · "
-                                f"đúng {p['correct']}/{p['answered']}{team}")
+            icon, title = title_of(p["level"])
+            self._push("score", f"📊 {p['name']}: {p['score']} sát thương · hạng {self._rank(p['id'])} · "
+                                f"cấp {p['level']} {icon} {title}")
             return
         ask = bot.parse_ask(text)
         if ask is not None and self.cfg["bot"]:
@@ -682,15 +829,11 @@ class LiveGame:
                 self.bot_cool[uid] = now
                 self.bot_asks.append({"uid": uid, "name": (user.get("name") or uid)[:40], "text": ask})
             return
-        if self.cfg["teams"]:
-            team = parse_team(text)
-            if team:
-                self._join_team(user, team)
-                return
-        if self.phase == "board" and self.vote is not None:
+        if self.phase == "clear" and self.vote is not None:
             v = parse_vote(text)
             uid = str(user["id"])
             if v is not None and uid not in self.vote["voters"]:
+                self._player(user)
                 self.vote["voters"].add(uid)
                 self.vote["counts"][v] += 1
             return
@@ -705,23 +848,18 @@ class LiveGame:
         p = self._player(user)
         now = self.clock()
         ok = idx == self.q["answer"]
-        points = 0
+        points, crit = 0, False
         p["answered"] += 1
         if ok:
-            first = not any(a["correct"] for a in self.answers.values())
+            crit = not any(a["correct"] for a in self.answers.values())
             remain = min(1.0, max(0.0, self.phase_end - now) / (self.q_duration or self.cfg["question_s"]))
             p["streak"] += 1
             p["best_streak"] = max(p["best_streak"], p["streak"])
-            points = 10 + round(10 * remain) + (5 if first else 0) + (min(10, p["streak"]) if p["streak"] >= 3 else 0)
+            points = 10 + round(10 * remain) + (5 if crit else 0) + (min(10, p["streak"]) if p["streak"] >= 3 else 0)
             if self.double:
                 points *= 2
-            if self.special in ("boss", "final"):
-                points *= BOSS_MULT
             p["score"] += points
-            p["round_score"] += points
             p["correct"] += 1
-            if p["team"]:
-                self.teams[p["team"]]["score"] += points
             if p["streak"] >= 5 and p["streak"] % 5 == 0:
                 self._push("streak", f"🔥 {p['name']} đúng liên tiếp {p['streak']} câu!", alert=True, tier=2)
                 self._bot("streak", name=p["name"], n=p["streak"])
@@ -730,58 +868,19 @@ class LiveGame:
                 self._push("streak", f"💔 {p['name']} mất chuỗi {p['streak']} câu")
                 self._bot("streak_lost", name=p["name"], n=p["streak"])
             p["streak"] = 0
-        self.answers[uid] = {"uid": uid, "idx": idx, "at": now, "correct": ok, "points": points}
+        self.answers[uid] = {"uid": uid, "idx": idx, "at": now, "correct": ok, "points": points, "crit": crit}
         self.recent_ans.append({"name": p["name"], "avatar": p["avatar"], "letter": LETTERS[idx],
-                                "seq": len(self.answers)})
-
-    def _join_team(self, user: dict, team: str):
-        p = self._player(user)
-        if p["team"] == team:
-            return
-        if p["team"]:                 # không cho đổi đội giữa phiên, tránh nhảy sang đội đang thắng
-            self._push("team", f"{TEAM_ICON[p['team']]} {p['name']} đã ở đội {TEAMS[p['team']]} rồi")
-            return
-        p["team"] = team
-        self.teams[team]["members"] += 1
-        self._push("team", f"{TEAM_ICON[team]} {p['name']} vào đội {TEAMS[team]}")
+                                "level": p["level"], "seq": len(self.answers)})
 
     def _gift(self, user: dict, ev: dict):
+        """Quà không có tác dụng gì trong game: chỉ ghi nhận số kim cương (để kiểm tra SDK có gửi giá quà không)."""
         p = self._player(user)
         n = max(1, int(ev.get("count") or 1))
         unit = max(0, int(ev.get("diamonds") or 0))
         total = max(n, unit * n)      # không rõ giá quà thì coi mỗi món 1 kim cương
         p["gifts"] += n
         p["diamonds"] += total
-        cfg = self.cfg
-        tier = 3 if total >= cfg["gift_huge"] else 2 if total >= cfg["gift_big"] else 1
-        gift = (ev.get("gift_name") or "quà")[:40]
-        msg = f"🎁 {p['name']} tặng {gift} ×{n}"
-        effects = []
-        if self.phase == "question" and self.q:
-            wrong = [i for i in range(len(self.q["options"])) if i != self.q["answer"] and i not in self.hints]
-            if len(wrong) > 1:        # luôn chừa lại ít nhất 1 đáp án sai
-                self.hints.append(random.choice(wrong))
-                effects.append("loại 1 đáp án sai")
-            if tier >= 2 and self.extra < EXTRA_MAX:
-                add = min(EXTRA_S, EXTRA_MAX - self.extra)
-                self.extra += add
-                self.phase_end += add
-                self.q_duration += add
-                self.replay += 1
-                effects.append(f"+{add} giây")
-        if tier >= 3:
-            self.sponsors.append(p["name"])
-            effects.append("tài trợ câu kế tiếp")
-        if effects:
-            msg += " → " + ", ".join(effects) + "!"
-        self._push("gift", msg, alert=tier >= 2, tier=tier, who=p["name"], gift=gift, count=n)
-        self._bot("gift_big" if tier >= 2 else "gift", force=tier >= 2, name=p["name"])
         self.diamonds += total
-        hit, self.diamond_mark = self._goal(self.diamonds, self.diamond_mark, cfg["gift_goal"])
-        if hit:
-            self.queued.append("boss")
-            self._push("goal", f"💎 Cả phòng đủ {cfg['gift_goal']} kim cương! Sắp có CÂU BOSS x3", alert=True, tier=3)
-            self._bot("goal")
         if self.persist:
             self._save([p])
 
@@ -790,8 +889,8 @@ class LiveGame:
         hit, self.like_mark = self._goal(self.likes, self.like_mark, self.cfg["like_goal"])
         if hit:
             self.double_next = True
-            self._push("like", f"❤️ Đủ {self.cfg['like_goal']} tim! Câu tiếp theo nhân đôi điểm", alert=True, tier=2)
-            self._bot("goal")
+            self._push("like", f"❤️ Đủ {self.cfg['like_goal']} tim! Câu tiếp theo x2 sát thương", alert=True, tier=2)
+            self._bot("like_goal")
 
     def _share(self, name: str):
         self.shares += 1
@@ -799,9 +898,14 @@ class LiveGame:
         self._bot("share", force=False, name=name)
         hit, self.share_mark = self._goal(self.shares, self.share_mark, self.cfg["share_goal"])
         if hit:
-            self.double_next = True
-            self._push("goal", f"🔁 Đủ {self.cfg['share_goal']} lượt chia sẻ! Câu tiếp theo nhân đôi điểm",
-                       alert=True, tier=2)
+            if self.hearts < self.cfg["hearts"]:
+                self.hearts += 1
+                self._push("goal", f"🔁 Đủ {self.cfg['share_goal']} lượt chia sẻ! Hồi 1 tim 💖", alert=True, tier=2)
+            else:
+                self.double_next = True
+                self._push("goal", f"🔁 Đủ {self.cfg['share_goal']} lượt chia sẻ! Tim đầy nên câu sau x2 sát thương",
+                           alert=True, tier=2)
+            self._bot("share_goal")
 
     # -------------------------------------------------------- persistence
     def _save(self, players: list[dict]):
@@ -831,11 +935,12 @@ class LiveGame:
             self._push("system", f"Lỗi lưu điểm: {e}")
 
     def _log_round(self, correct: int):
+        special = "boss" if self.monster and self.monster["boss"] else (self.special or "")
         try:
             with db.tx() as c:
                 c.execute("INSERT INTO live_rounds(word_id,mode,special,answered,correct,comments,viewers) "
                           "VALUES(?,?,?,?,?,?,?)",
-                          (self.q["word_id"], self.q["mode"], self.special or "", len(self.answers), correct,
+                          (self.q["word_id"], self.q["mode"], special, len(self.answers), correct,
                            self.q_comments, self.viewers))
         except Exception as e:
             self._push("system", f"Lỗi lưu thống kê: {e}")
@@ -861,12 +966,8 @@ class LiveGame:
                     "prompt": "🎧" if listen and not reveal else self.q["prompt"],
                     "prompt_lang": self.q["prompt_lang"],
                     "options": self.q["options"],
-                    "hints": list(self.hints),
                     "double": self.double,
-                    "mult": (2 if self.double else 1) * (BOSS_MULT if self.special in ("boss", "final") else 1),
-                    "sponsor": self.sponsor,
-                    "extra": self.extra,
-                    "replay": self.replay,
+                    "mult": 2 if self.double else 1,
                     "word_id": self.q["word_id"],
                     "answered": len(self.answers),
                     "counts": counts if (reveal or cfg["live_counts"]) else None,
@@ -879,56 +980,56 @@ class LiveGame:
                      if self.q["mode"] in ("ko2vi", "hanviet") and not listen else ""},
                     "result": self.last_result if reveal else None,
                 }
+            m = self.monster
+            monster = None
+            if m:
+                monster = {**{k: m[k] for k in ("floor", "name", "boss", "hp", "max_hp", "seed", "zone", "zone_name")},
+                           "traits": [{"id": t, **TRAITS[t]} for t in m["traits"]]}
+                if self.phase == "reveal" and self.last_result:
+                    monster["hp"] = self.last_result["hp_after"]
             top = sorted(self.players.values(), key=lambda p: (-p["score"], p["name"]))
-            supporters = sorted((p for p in self.players.values() if p["diamonds"]),
-                                key=lambda p: (-p["diamonds"], p["name"]))
-            streakers = sorted((p for p in self.players.values() if p["streak"] >= 3),
-                               key=lambda p: (-p["streak"], p["name"]))
 
             def goal(total, mark, g):
                 return {"value": total - mark if g else total, "goal": g,
                         "progress": min(1.0, (total - mark) / g) if g else 0}
 
-            nxt = self.queued[0] if self.queued else None
+            zone_floor = self.floor if not m else m["floor"]
             out = {
                 "phase": self.phase,
                 "remaining": max(0.0, round(self.phase_end - now, 2)) if self.phase != "idle" else 0,
-                "duration": {"question": self.q_duration, "reveal": cfg["reveal_s"],
-                             "board": cfg["board_s"]}.get(self.phase, 0),
+                "duration": {"question": self.q_duration, "reveal": cfg["reveal_s"], "clear": cfg["clear_s"],
+                             "fail": max(4, cfg["clear_s"] - 4)}.get(self.phase, 0),
                 "question": q,
+                "monster": monster,
+                "room": {"hearts": self.hearts, "max_hearts": cfg["hearts"], "floor": zone_floor,
+                         "checkpoint": self._checkpoint(zone_floor), "best_floor": self.best_floor,
+                         "kills": self.kills, "zone_len": self._every()},
+                "outcome": self.outcome if self.phase in ("clear", "fail") else None,
                 "round": self.rounds,
                 "message": self.message,
-                "top": [{**{k: p[k] for k in ("name", "score", "streak", "correct", "team", "avatar", "round_score")},
+                "top": [{**self._brief(p), "score": p["score"], "streak": p["streak"],
                          "crown": p["id"] == self.king_uid} for p in top[:10]],
-                "round_info": {"no": self.round_no, "q": self.round_q, "len": cfg["round_len"]},
-                "round_end": self.round_end,
                 "recent_ans": list(self.recent_ans) if self.phase == "question" else [],
-                "supporters": [{"name": p["name"], "gifts": p["gifts"], "diamonds": p["diamonds"]}
-                               for p in supporters[:5]],
-                "hot": [{"name": p["name"], "streak": p["streak"]} for p in streakers[:3]],
-                "all_time": [],
+                "hot": [{"name": p["name"], "streak": p["streak"]}
+                        for p in sorted((p for p in self.players.values() if p["streak"] >= 3),
+                                        key=lambda p: (-p["streak"], p["name"]))[:3]],
                 "weekly": [],
-                "weekly_fans": [],
                 "players": len(self.players),
                 "likes": self.likes,
-                "like_progress": (self.likes - self.like_mark) / cfg["like_goal"] if cfg["like_goal"] else 0,
-                "like_goal": cfg["like_goal"],
                 "goals": {"likes": goal(self.likes, self.like_mark, cfg["like_goal"]),
-                          "diamonds": goal(self.diamonds, self.diamond_mark, cfg["gift_goal"]),
                           "shares": goal(self.shares, self.share_mark, cfg["share_goal"])},
                 "double_next": self.double_next,
-                "next_special": nxt,
-                "teams": ({k: {"name": TEAMS[k], **v} for k, v in self.teams.items()} if cfg["teams"] else None),
-                "vote": ({"options": [o[1] for o in VOTE_OPTS], "counts": list(self.vote["counts"])}
-                         if self.vote is not None else None),
-                "vote_mode": self.vote_mode,
+                "force_boss": self.force_boss,
+                "vote": ({"doors": [{"id": d, **TRAITS[d]} for d in self.vote["doors"]],
+                          "counts": list(self.vote["counts"])} if self.vote is not None else None),
                 "viewers": self.viewers,
                 "follows": self.follows,
                 "feed": list(self.feed),
                 "config": dict(cfg),
                 "ai_down": self.ai_down,
                 "bot": {"name": bot.NAME, "lines": list(self.bot_lines),
-                        "mood": {"idle": "sleep", "board": "happy"}.get(self.phase, "idle")} if cfg["bot"] else None,
+                        "mood": {"idle": "sleep", "clear": "dance", "fail": "sad"}.get(self.phase, "idle")}
+                if cfg["bot"] else None,
             }
             out.update(boards or {})
             return out
@@ -966,11 +1067,6 @@ def all_time_top(n=5) -> list[dict]:
 
 def weekly_top(n=5, t: float | None = None) -> list[dict]:
     return db.q("SELECT name, score FROM live_weekly WHERE week=? AND score>0 ORDER BY score DESC LIMIT ?",
-                (week_key(t or time.time()), n))
-
-
-def weekly_fans(n=3, t: float | None = None) -> list[dict]:
-    return db.q("SELECT name, diamonds FROM live_weekly WHERE week=? AND diamonds>0 ORDER BY diamonds DESC LIMIT ?",
                 (week_key(t or time.time()), n))
 
 

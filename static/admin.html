@@ -24,13 +24,21 @@
       <button class="btn primary" data-game="start">▶ Bắt đầu</button>
       <button class="btn" data-game="pause">⏸ Tạm dừng</button>
       <button class="btn" data-game="skip">⏭ Câu tiếp</button>
-      <button class="btn danger" data-game="reset">🗑 Xoá điểm phiên</button>
+      <button class="btn danger" data-game="reset">🔄 Làm lại từ ải 1</button>
     </div>
     <div class="row">
-      <span class="muted">Tạo cao trào cho câu kế tiếp:</span>
-      <button class="btn" data-game="boss">👹 Câu boss x3</button>
-      <button class="btn" data-game="listen">🎧 Câu nghe</button>
-      <button class="btn" data-game="double">⚡ x2 điểm</button>
+      <span class="muted">Tạo cao trào:</span>
+      <button class="btn" data-game="boss">👹 Quái sau là BOSS</button>
+      <button class="btn" data-game="double">💥 Câu sau x2 sát thương</button>
+      <button class="btn" data-game="heart">💖 +1 tim cho phòng</button>
+    </div>
+    <div class="row">
+      <span class="muted">Đặc tính quái sau (thắng bình chọn):</span>
+      <button class="btn" data-game="fast">⚡ Nhanh nhẹn</button>
+      <button class="btn" data-game="stealth">👻 Tàng hình (câu nghe)</button>
+      <button class="btn" data-game="armor">🛡 Giáp dày</button>
+      <button class="btn" data-game="mirror">🪞 Đảo ngược</button>
+      <button class="btn" data-game="heal">💚 Tự hồi máu</button>
     </div>
     <ol id="adminTop" class="list"></ol>
   </section>
@@ -55,16 +63,13 @@
     <h3>🧪 Gửi sự kiện giả (chế độ thử)</h3>
     <div class="grid">
       <label>Tên người xem<input id="mName" value="Minh Anh"></label>
-      <label>Nội dung comment<input id="mText" value="A" placeholder="A / B / C / D / điểm"></label>
+      <label>Nội dung comment<input id="mText" value="A" placeholder="A / B / C / D / điểm / cửa 1"></label>
     </div>
     <div class="row">
       <button class="btn" id="mSend">💬 Gửi comment</button>
       <button class="btn" data-mock="random">🎲 10 người trả lời ngẫu nhiên</button>
-      <button class="btn" data-mock="gift">🌹 Quà nhỏ (1💎)</button>
-      <button class="btn" data-mock="gift-big">🍩 Quà lớn (30💎)</button>
-      <button class="btn" data-mock="gift-huge">🦁 Quà rất lớn (100💎)</button>
+      <button class="btn" data-mock="vote">🚪 10 người chọn cửa</button>
       <button class="btn" data-mock="share">🔁 Chia sẻ</button>
-      <button class="btn" data-mock="team">🔴🔵 10 người vào đội</button>
       <button class="btn" data-mock="like">❤️ +100 tim</button>
       <button class="btn" data-mock="join">👋 Vào phòng</button>
       <button class="btn" data-mock="follow">➕ Theo dõi</button>
@@ -76,13 +81,13 @@
     <div class="row"><input id="overlayUrl" readonly class="grow"><button class="btn" id="copyUrl">📋 Chép</button>
       <a class="btn" id="openUrl" target="_blank">↗ Mở</a><a class="btn" id="guideUrl" target="_blank">📐 Mở kèm khung TikTok</a></div>
     <p class="muted">📐 Khung TikTok vẽ ước lượng chỗ comment, ô nhập, tên host… đè lên overlay. Mở link này trong LIVE Studio/OBS khi căn chỉnh,
-      kéo hai đường xanh (safe_top / safe_bottom ở Cài đặt vòng chơi) cho khớp với điện thoại của bạn, xong thì dùng lại link thường.</p>
+      kéo hai đường xanh (safe_top / safe_bottom ở Cài đặt trò chơi) cho khớp với điện thoại của bạn, xong thì dùng lại link thường.</p>
     <p class="muted">TikTok LIVE Studio: <b>Thêm nguồn › Liên kết / Trình duyệt</b>, dán link, kích thước 1080 × 1920.
       OBS: <b>Browser Source</b> cùng kích thước, tích "Control audio via OBS". Thêm <code>&amp;bg=0</code> vào cuối link nếu muốn nền trong suốt để chồng lên camera.</p>
   </section>
 
   <section class="card">
-    <h3>⚙️ Cài đặt vòng chơi</h3>
+    <h3>⚙️ Cài đặt trò chơi</h3>
     <form id="gameCfg" class="grid">
       <label>Nguồn từ (từ HanSong)<select name="source">
         <option value="all">Tất cả</option><option value="today">Hôm nay</option><option value="due">Đến hạn ôn</option>
@@ -94,19 +99,15 @@
         <option value="cloze">🧩 Điền chỗ trống trong câu (cần AI)</option>
         <option value="trans">📝 Dịch câu ví dụ (cần AI)</option>
         <option value="hanviet">🈶 Đoán âm Hán Việt</option></select></label>
-      <label>Thời gian trả lời (giây)<input type="number" name="question_s" min="8" max="120"></label>
-      <label>Thời gian hiện đáp án (giây)<input type="number" name="reveal_s" min="3" max="30"></label>
-      <label>Hiện bảng xếp hạng sau mỗi N câu (0 = tắt)<input type="number" name="board_every" min="0" max="50"></label>
-      <label>Thời gian hiện bảng xếp hạng (giây)<input type="number" name="board_s" min="4" max="30"></label>
-      <label>Số tim để câu sau x2 (0 = tắt)<input type="number" name="like_goal" min="0" max="100000"></label>
-      <label>Số lượt chia sẻ để câu sau x2 (0 = tắt)<input type="number" name="share_goal" min="0" max="10000"></label>
-      <label>Tổng kim cương cả phòng để mở câu boss (0 = tắt)<input type="number" name="gift_goal" min="0" max="1000000"></label>
-      <label>Quà lớn từ (kim cương): +10 giây, phát lại âm<input type="number" name="gift_big" min="1" max="1000000"></label>
-      <label>Quà rất lớn từ (kim cương): nhà tài trợ câu kế<input type="number" name="gift_huge" min="1" max="1000000"></label>
-      <label>Câu boss sau mỗi N câu (0 = tắt)<input type="number" name="boss_every" min="0" max="100"></label>
-      <label>Câu nghe sau mỗi N câu (0 = tắt)<input type="number" name="listen_every" min="0" max="100"></label>
-      <label>Đội Đỏ / Xanh<select name="teams"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
-      <label>Bình chọn kiểu câu lúc hiện bảng<select name="vote"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>Thời gian trả lời mỗi câu (giây)<input type="number" name="question_s" min="8" max="120"></label>
+      <label>Thời gian hiện đáp án + đòn đánh (giây)<input type="number" name="reveal_s" min="3" max="30"></label>
+      <label>Thời gian màn hạ quái / thua (giây)<input type="number" name="clear_s" min="4" max="40"></label>
+      <label>Số tim chung của cả phòng<input type="number" name="hearts" min="1" max="20"></label>
+      <label>Số câu ước tính để hạ 1 quái thường (máu quái tự tính theo số người chơi)<input type="number" name="turns" min="1" max="20"></label>
+      <label>Boss sau mỗi N ải, cũng là độ dài 1 vùng / điểm hồi sinh (0 = không boss)<input type="number" name="boss_every" min="0" max="50"></label>
+      <label>Số tim (thả tim) để câu sau x2 sát thương (0 = tắt)<input type="number" name="like_goal" min="0" max="100000"></label>
+      <label>Số lượt chia sẻ để hồi 1 tim cho phòng (0 = tắt)<input type="number" name="share_goal" min="0" max="10000"></label>
+      <label>Hạ quái xong cho bình chọn 1 trong 3 cửa<select name="vote"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <label>Hiện tỉ lệ A/B/C/D trong lúc hỏi<select name="live_counts"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <label>Vùng an toàn TikTok (không bị comment che)<select name="safe"><option value="1">Bật</option><option value="0">Tắt (phủ kín màn hình)</option></select></label>
       <label>Chừa phía trên cho tên host (% chiều cao)<input type="number" name="safe_top" min="0" max="30"></label>
@@ -114,9 +115,8 @@
       <label>Bot Hami<select name="bot"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <label>Hami trả lời câu hỏi bằng AI ("bot ơi …")<select name="bot_ai"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <label>Hami đọc to câu thoại (giọng dễ thương)<select name="bot_voice"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
-      <label>Hami mời thả tim / follow / ủng hộ sau mỗi N câu (0 = tắt)<input type="number" name="support_every" min="0" max="100"></label>
-      <label>Số câu mỗi vòng (câu cuối là chung kết x3, 0 = tắt)<input type="number" name="round_len" min="0" max="100"></label>
-      <label>Hiệu ứng âm thanh (tích tắc, ting, reo hò)<select name="sfx"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+      <label>Hami mời thả tim / follow / share sau mỗi N câu (0 = tắt)<input type="number" name="support_every" min="0" max="100"></label>
+      <label>Hiệu ứng âm thanh (đấm, chém, tích tắc…)<select name="sfx"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
       <div class="row end"><button class="btn primary">💾 Lưu cài đặt</button></div>
     </form>
   </section>

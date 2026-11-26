@@ -1,10 +1,9 @@
 "use strict";
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const PHASE = { idle: "Đang dừng", question: "Đang hỏi", reveal: "Hiện đáp án", board: "Bảng xếp hạng" };
+const PHASE = { idle: "Đang dừng", question: "Đang hỏi", reveal: "Hiện đáp án", clear: "Hạ quái", fail: "Cả phòng thua" };
 const MOCK_NAMES = ["Minh Anh", "Tuấn", "Hà Linh", "Bảo", "Thu Trang", "Khoa", "Ngọc", "Duy", "Mai", "Phúc", "Lan", "Quân"];
-const SPECIAL = { boss: "👹 boss", listen: "🎧 nghe" };
-const KIND = { ko2vi: "Hàn → Việt", vi2ko: "Việt → Hàn", listen: "🎧 Nghe", boss: "👹 Boss", cloze: "🧩 Điền chỗ trống", trans: "📝 Dịch câu", hanviet: "🈶 Hán Việt" };
+const KIND = { ko2vi: "Hàn → Việt", vi2ko: "Việt → Hàn", listen: "👻 Nghe (tàng hình)", boss: "👹 Boss", cloze: "🧩 Điền chỗ trống", trans: "📝 Dịch câu", hanviet: "🈶 Hán Việt" };
 let formLoaded = false;
 
 function toast(m, ms = 2500) { const t = $("#toast"); t.textContent = m; t.classList.add("show"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("show"), ms); }
@@ -33,13 +32,13 @@ function render(s) {
   $("#pill").className = "pill " + st.state;
   $("#status").textContent = st.detail + (st.attempt > 1 ? ` (lần ${st.attempt})` : "");
   $("#mockCard").style.opacity = st.mode === "mock" ? 1 : .5;
-  const g = s.game, Q = g.question;
+  const g = s.game, Q = g.question, M = g.monster, R = g.room;
   $("#gameInfo").innerHTML = `<b>${PHASE[g.phase]}</b>${g.phase !== "idle" ? ` · còn ${Math.ceil(g.remaining)}s` : ""} · đã chơi ${g.round} câu ·
-    ${g.players} người chơi · ❤️ ${g.likes} · 💎 ${g.goals.diamonds.value}/${g.goals.diamonds.goal} · 🔁 ${g.goals.shares.value} · ➕ ${g.follows}
-    ${g.double_next ? " · <b style='color:var(--warn)'>câu sau x2</b>" : ""}${g.next_special ? ` · <b style='color:var(--warn)'>câu sau: ${SPECIAL[g.next_special]}</b>` : ""}
-    ${g.teams ? `<br>🔴 Đỏ ${g.teams.red.score} (${g.teams.red.members} người) · 🔵 Xanh ${g.teams.blue.score} (${g.teams.blue.members} người)` : ""}
-    ${g.vote_mode ? ` · khán giả chọn: ${KIND[g.vote_mode]}` : ""}
-    ${Q ? `<br>Câu hiện tại${Q.special ? " (" + SPECIAL[Q.special] + ")" : ""}: <b>${esc(Q.prompt)}</b> · ${Q.answered} trả lời${Q.answer != null ? ` · đáp án ${"ABCD"[Q.answer]}: ${esc(Q.options[Q.answer])}` : ""}` : ""}
+    ${g.players} người chơi · ❤️ ${g.likes} · 🔁 ${g.goals.shares.value} · ➕ ${g.follows}
+    <br>🗺 Ải ${R.floor} · tim ${"❤️".repeat(R.hearts)}${"🖤".repeat(Math.max(0, R.max_hearts - R.hearts))} · đã hạ ${R.kills} quái · kỷ lục ải ${R.best_floor || "-"}
+    ${M ? `<br>${M.boss ? "👹 BOSS " : "Quái "}<b>${esc(M.name)}</b> · máu ${M.hp}/${M.max_hp}${M.traits.length ? " · " + M.traits.map((t) => t.icon + " " + esc(t.name)).join(", ") : ""}` : ""}
+    ${g.double_next ? " · <b style='color:var(--warn)'>câu sau x2</b>" : ""}${g.force_boss ? " · <b style='color:var(--warn)'>quái sau là BOSS</b>" : ""}
+    ${Q ? `<br>Câu hiện tại${Q.listen ? " (👻 nghe)" : ""}: <b>${esc(Q.prompt)}</b> · ${Q.answered} trả lời${Q.answer != null ? ` · đáp án ${"ABCD"[Q.answer]}: ${esc(Q.options[Q.answer])}` : ""}` : ""}
     ${g.message ? `<br><span class="err">${esc(g.message)}</span>` : ""}`;
   const A = s.ai, J = A.job;
   $("#aiInfo").innerHTML = `Đã có: 🧩 ${A.counts.cloze || 0} câu điền chỗ trống · 📝 ${A.counts.trans || 0} câu dịch ·
@@ -53,7 +52,7 @@ function render(s) {
   $("#aiDown").innerHTML = A.down === "credit"
     ? "⚠️ <b>Tài khoản AI đã hết tiền / hết hạn mức.</b> Hami đang báo với người xem và tạm không trả lời. Nạp thêm tiền hoặc đổi key rồi bấm 💾 Lưu, app sẽ thử lại ngay (tự thử lại sau 15 phút)."
     : A.down === "key" ? "⚠️ <b>API key AI sai hoặc đã bị thu hồi.</b> Nhập key mới rồi bấm 💾 Lưu." : "";
-  $("#adminTop").innerHTML = g.top.map((p) => `<li>${esc(p.name)} <b>${p.score}</b></li>`).join("");
+  $("#adminTop").innerHTML = g.top.map((p) => `<li>${esc(p.name)} · cấp ${p.level} ${p.icon} <b>${p.score}</b></li>`).join("");
   $("#overlayUrl").value = location.origin + s.overlay_path;
   $("#openUrl").href = s.overlay_path;
   $("#guideUrl").href = s.overlay_path + "&guide=1";
@@ -82,7 +81,7 @@ setInterval(() => { if (!$("#app").classList.contains("hidden")) refresh(); }, 1
 refresh();
 
 document.querySelectorAll("[data-game]").forEach((b) => b.addEventListener("click", run(async () => {
-  if (b.dataset.game === "reset" && !confirm("Xoá điểm của phiên live này? (Điểm mọi thời đại vẫn giữ)")) return;
+  if (b.dataset.game === "reset" && !confirm("Làm lại từ ải 1 và xoá điểm phiên này? (Điểm mọi thời đại + kỷ lục vẫn giữ)")) return;
   await api("/api/game", "POST", { action: b.dataset.game }); refresh();
 })));
 document.querySelectorAll("[data-connect]").forEach((b) => b.addEventListener("click", run(async () => {
@@ -116,11 +115,8 @@ document.querySelectorAll("[data-mock]").forEach((b) => b.addEventListener("clic
   if (k === "random") {
     for (const n of MOCK_NAMES.slice(0, 10).sort(() => Math.random() - .5))
       await mock({ type: "comment", name: n, text: "ABCD"[Math.floor(Math.random() * 4)] });
-  } else if (k === "gift") await mock({ type: "gift", name, count: 1, gift_name: "Hoa hồng", diamonds: 1 });
-  else if (k === "gift-big") await mock({ type: "gift", name, count: 1, gift_name: "Bánh donut", diamonds: 30 });
-  else if (k === "gift-huge") await mock({ type: "gift", name, count: 1, gift_name: "Sư tử", diamonds: 100 });
-  else if (k === "team") {
-    for (const [i, n] of MOCK_NAMES.slice(0, 10).entries()) await mock({ type: "comment", name: n, text: i % 2 ? "đội xanh" : "đội đỏ" });
+  } else if (k === "vote") {
+    for (const n of MOCK_NAMES.slice(0, 10)) await mock({ type: "comment", name: n, text: String(1 + Math.floor(Math.random() * 3)) });
   }
   else if (k === "like") await mock({ type: "like", name, count: 100 });
   else await mock({ type: k, name });

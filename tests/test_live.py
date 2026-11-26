@@ -20,11 +20,13 @@ class Clock:
     def __call__(self): return self.t
 
 
-def make_game(mode="ko2vi"):
+def make_game(mode="ko2vi", **cfg):
     clock = Clock()
     pick = lambda recent, cfg: live.build_question(WORDS[0], WORDS, cfg["mode"])
     g = live.LiveGame(pick, clock=clock, persist=False)
-    g.configure({"mode": mode, "question_s": 20, "reveal_s": 5, "board_every": 2, "like_goal": 300})
+    # turns cao + không boss + không bình chọn: quái thường đủ máu cho nhiều câu, test luồng câu hỏi không bị màn hạ quái chen vào
+    g.configure({"mode": mode, "question_s": 20, "reveal_s": 5, "clear_s": 10, "like_goal": 300, "turns": 20,
+                 "boss_every": 0, "vote": 0, **cfg})
     return g, clock
 
 
@@ -48,9 +50,10 @@ def test_round_scoring_and_phases():
     g.start()
     s = g.state()
     assert s["phase"] == "question" and s["question"]["prompt"] == "학교" and s["question"]["answer"] is None
+    assert s["monster"]["floor"] == 1 and s["monster"]["hp"] == s["monster"]["max_hp"] == 220   # 1 người × 11 × 20 câu
     right = "ABCD"[g.q["answer"]]
     wrong = "ABCD"[(g.q["answer"] + 1) % 4]
-    g.handle(C("an", right))            # đúng, nhanh nhất
+    g.handle(C("an", right))            # đúng, nhanh nhất = chí mạng
     clock.t += 10
     g.handle(C("binh", right))          # đúng, chậm hơn
     g.handle(C("chi", wrong))
@@ -61,20 +64,19 @@ def test_round_scoring_and_phases():
     assert p["binh"]["score"] == 10 + 5
     assert p["chi"]["score"] == 0 and p["chi"]["answered"] == 1
     assert "dung" not in p
+    assert g.state()["monster"]["hp"] == 220          # đang hỏi: máu quái chưa tụt (không lộ ai đúng)
     clock.t += 10.1
     g.tick()
     s = g.state()
+    r = s["question"]["result"]
     assert s["phase"] == "reveal" and s["question"]["answer"] == g.q["answer"]
-    assert s["question"]["result"]["correct"] == 2 and s["question"]["result"]["total"] == 3
-    assert s["question"]["result"]["fastest"][0]["name"] == "an"
+    assert r["correct"] == 2 and r["total"] == 3 and r["dmg"] == 40 and r["attack"] is None
+    assert [h["name"] for h in r["hits"]] == ["an", "binh"] and r["hits"][0]["crit"] and not r["hits"][1]["crit"]
+    assert r["hp_before"] == 220 and r["hp_after"] == s["monster"]["hp"] == 180 and not r["killed"]
     g.handle(C("an", right))            # trả lời khi đang hiện đáp án: bỏ qua
     assert g.players["an"]["answered"] == 1
     clock.t += 5.1; g.tick()
-    assert g.phase == "question" and g.qid == 2
-    clock.t += 20.1; g.tick(); clock.t += 5.1; g.tick()
-    assert g.phase == "board"           # board_every=2
-    clock.t += 10.1; g.tick()
-    assert g.phase == "question"
+    assert g.phase == "question" and g.qid == 2 and g.state()["monster"]["hp"] == 180
 
 
 def test_streak_bonus_and_score_command():
@@ -87,24 +89,29 @@ def test_streak_bonus_and_score_command():
         g.skip()
     assert g.players["an"]["streak"] == 3
     assert g.players["an"]["score"] == 25 * 3 + 3      # chuỗi 3 -> +3
+    assert g.players["an"]["level"] == 2               # 78 sát thương -> cấp 2
     g.handle(C("an", "điểm"))
-    assert "78 điểm" in g.feed[-1]["text"] and "hạng 1" in g.feed[-1]["text"]
+    assert "78 sát thương" in g.feed[-1]["text"] and "hạng 1" in g.feed[-1]["text"] and "cấp 2" in g.feed[-1]["text"]
 
 
-def test_gift_removes_wrong_option_and_likes_double():
+def test_gifts_do_nothing_in_game_and_likes_double():
+    """Người dùng yêu cầu bỏ hẳn tính năng quà: quà không loại đáp án, không thêm giờ, không cộng điểm, không thông báo."""
     g, clock = make_game()
     g.start()
-    for _ in range(5):
-        g.handle({"type": "gift", "user": {"id": "u", "name": "Lan"}, "count": 1, "gift_name": "Rose"})
-    hints = g.state()["question"]["hints"]
-    assert len(hints) == 2 and g.q["answer"] not in hints   # luôn chừa 1 đáp án sai
-    assert g.players["u"]["gifts"] == 5 and g.players["u"]["score"] == 0  # quà không quy ra điểm
+    end, feed, said = g.phase_end, len(g.feed), g.bot_seq
+    for d in (1, 30, 100, 1000):
+        g.handle({"type": "gift", "user": {"id": "u", "name": "Lan"}, "count": 2, "gift_name": "Rose", "diamonds": d})
+    s = g.state()
+    assert g.phase_end == end and len(g.feed) == feed and g.bot_seq == said
+    assert "hints" not in s["question"] and "sponsor" not in s["question"] and "diamonds" not in s["goals"]
+    assert g.players["u"]["score"] == 0 and g.players["u"]["diamonds"] == 2 * (1 + 30 + 100 + 1000)   # chỉ ghi nhận
+    assert g.hearts == 5 and not g.double_next and not g.force_boss
     g.handle({"type": "like", "user": {"id": "v", "name": "V"}, "count": 299})
     assert not g.double_next
     g.handle({"type": "like", "user": {"id": "v", "name": "V"}, "count": 1})
     assert g.double_next
     g.skip(); g.skip()
-    assert g.double and not g.double_next
+    assert g.double and not g.double_next and g.state()["question"]["mult"] == 2
     g.handle(C("an", "ABCD"[g.q["answer"]]))
     assert g.players["an"]["score"] == 50
 
@@ -210,66 +217,66 @@ def answer(g, uid, ok=True):
     g.handle(C(uid, "ABCD"[g.q["answer"] if ok else (g.q["answer"] + 1) % 4]))
 
 
-def test_gift_tiers_never_give_points():
-    g, clock = make_game()
-    g.configure({"gift_big": 30, "gift_huge": 100, "gift_goal": 0})
+def test_room_counterattack_and_share_heal():
+    g, clock = make_game(hearts=3, share_goal=2)
     g.start()
-    end = g.phase_end
-    g.handle(G("a", 1))                                  # quà nhỏ: chỉ loại 1 đáp án
-    assert g.phase_end == end and len(g.hints) == 1 and g.feed[-1]["tier"] == 1
-    g.handle(G("b", 5, count=6))                         # 30 kim cương: +10 giây, phát lại âm
-    assert g.phase_end == end + 10 and g.state()["question"]["replay"] == 1 and g.feed[-1]["alert"]
-    for _ in range(4):
-        g.handle(G("b", 30))
-    assert g.phase_end == end + 30                       # tối đa +30 giây mỗi câu
-    g.handle(G("c", 100))                                # nhà tài trợ câu kế tiếp
-    assert all(p["score"] == 0 for p in g.players.values())
-    assert g.players["b"]["diamonds"] == 150
-    g.skip(); g.skip()
-    assert g.state()["question"]["sponsor"] == "c"
-    assert g.state()["supporters"][0]["name"] == "b"
-
-
-def test_room_goals_boss_and_double():
-    g, clock = make_game()
-    g.configure({"gift_goal": 50, "share_goal": 2, "boss_every": 0, "listen_every": 0})
-    g.start()
-    g.handle(G("a", 25, count=2))
-    assert list(g.queued) == ["boss"] and g.state()["goals"]["diamonds"]["value"] == 0
+    answer(g, "an"); answer(g, "binh", ok=False); answer(g, "chi", ok=False)   # 1/3 đúng < 50%: quái phản đòn
+    g.skip()
+    r = g.state()["question"]["result"]
+    assert r["attack"] == {"hearts": 1} and g.hearts == 2 and g.state()["room"]["hearts"] == 2
+    g.skip(); g.skip()                                    # không ai trả lời: quái không đánh (phòng vắng không bị trừ)
+    assert g.hearts == 2 and g.last_result["attack"] is None
     for u in ("x", "y"):
         g.handle({"type": "share", "user": {"id": u, "name": u}})
-    assert g.double_next
-    g.skip(); g.skip()
-    s = g.state()["question"]
-    assert s["special"] == "boss" and s["mult"] == 6 and g.q_duration == 12   # 20 * 0.6
-    answer(g, "an")
-    assert g.players["an"]["score"] == 25 * 6
+    assert g.hearts == 3 and "Hồi 1 tim" in g.feed[-1]["text"]
+    for u in ("x", "y"):
+        g.handle({"type": "share", "user": {"id": u, "name": u}})
+    assert g.hearts == 3 and g.double_next                 # tim đầy: đổi thành x2 sát thương
+    assert g.queue("heart") and g.hearts == 3              # không vượt quá số tim tối đa
 
 
-def test_listen_round_hides_prompt():
+def test_fail_returns_to_checkpoint():
+    g, clock = make_game(hearts=2, boss_every=3)
+    assert [g._checkpoint(f) for f in (1, 3, 4, 6, 7)] == [1, 1, 4, 4, 7]
+    g.start()
+    for _ in range(2):
+        answer(g, "an", ok=False)
+        g.skip()
+        if g.phase == "reveal":
+            g.skip()
+    s = g.state()
+    assert g.hearts == 0 and s["phase"] == "fail" and s["outcome"]["back_to"] == 1 and s["outcome"]["kind"] == "fail"
+    assert g.bot_lines[-1]["mood"] == "sad" and any(f["kind"] == "fail" for f in g.feed)
+    old = g.monster["seed"]
+    clock.t += 6.1; g.tick()                               # màn thua dài clear_s - 4 giây
+    assert g.phase == "question" and g.hearts == 2 and g.monster["floor"] == 1 and g.monster["seed"] != old
+
+
+def test_monster_traits_change_questions():
     g, clock = make_game("vi2ko")
-    g.configure({"listen_every": 1, "boss_every": 0})
+    assert g.queue("stealth")                              # admin chọn đặc tính cho quái sau
     g.start()
     q = g.state()["question"]
+    assert g.monster["traits"] == ["stealth"]
     assert q["listen"] and q["prompt"] == "🎧" and q["mode"] == "ko2vi" and q["word"]["romanization"] == ""
     g.skip()
-    assert g.state()["question"]["prompt"] == "학교"
+    assert g.state()["question"]["prompt"] == "학교"       # hiện đáp án: lộ đề
+    g2, _ = make_game("ko2vi")
+    g2.queue("mirror"); g2.start()
+    assert g2.q["mode"] == "vi2ko"
+    g3, _ = make_game()
+    g3.queue("fast"); g3.start()
+    assert g3.q_duration == 13                            # 20 × 0.65
 
 
-def test_live_counts_streak_alerts_and_teams():
+def test_live_counts_and_streak_alerts():
     g, clock = make_game()
-    g.configure({"boss_every": 0, "listen_every": 0})
     g.start()
-    g.handle(C("an", "đội đỏ"))
-    g.handle(C("an", "doi xanh"))                        # không được đổi đội
-    g.handle(C("binh", "Team Xanh"))
-    assert g.players["an"]["team"] == "red" and g.players["binh"]["team"] == "blue"
     answer(g, "an"); answer(g, "binh", ok=False)
     q = g.state()["question"]
     assert sum(q["counts"]) == 2 and q["answer"] is None
     g.configure({"live_counts": 0})
     assert g.state()["question"]["counts"] is None
-    assert g.teams["red"]["score"] == 25 and g.teams["blue"]["score"] == 0
     for _ in range(4):
         g.skip(); g.skip(); answer(g, "an")
     assert g.players["an"]["streak"] == 5 and any(f["kind"] == "streak" and f.get("alert") for f in g.feed)
@@ -277,17 +284,32 @@ def test_live_counts_streak_alerts_and_teams():
     assert "mất chuỗi 5" in g.feed[-1]["text"]
 
 
-def test_vote_sets_mode_until_next_board():
-    g, clock = make_game("ko2vi")
-    g.configure({"board_every": 1, "boss_every": 0, "listen_every": 0})
+def test_kill_clear_vote_and_next_monster():
+    g, clock = make_game(turns=1, vote=1)
     g.start()
-    answer(g, "an")
-    clock.t += 20.1; g.tick(); clock.t += 5.1; g.tick()
-    assert g.phase == "board" and g.state()["vote"]["counts"] == [0, 0, 0]
-    g.handle(C("an", "2")); g.handle(C("an", "1")); g.handle(C("binh", "số 2")); g.handle(C("chi", "1"))
+    assert g.monster["hp"] == 30 and g.monster["traits"] == []       # ải 1: quái yếu, chưa có đặc tính
+    av = "https://p16.tiktokcdn.com/a.webp"
+    g.handle({"type": "comment", "user": {"id": "an", "name": "An", "avatar": av}, "text": "ABCD"[g.q["answer"]]})
+    assert g.state()["recent_ans"][0] == {"name": "An", "avatar": av, "letter": "ABCD"[g.q["answer"]], "level": 1, "seq": 1}
+    clock.t += 1
+    answer(g, "binh")
+    clock.t += 19.1; g.tick()
+    r = g.state()["question"]["result"]
+    assert r["killed"] and r["hp_after"] == 0 and r["last_hit"]["name"] == "binh"
+    assert g.best_floor == 1 and g.kills == 1 and any(f["kind"] == "clear" and f["alert"] for f in g.feed)
+    clock.t += 5.1; g.tick()
+    s = g.state()
+    assert s["phase"] == "clear" and s["outcome"]["record"] and s["outcome"]["next_floor"] == 2
+    assert [p["name"] for p in s["outcome"]["mvp"]] == ["An", "binh"] and s["top"][0]["crown"]   # MVP đội vương miện
+    doors = [d["id"] for d in s["vote"]["doors"]]
+    assert len(set(doors)) == 3 and s["vote"]["counts"] == [0, 0, 0]
+    g.handle(C("an", "cửa 2")); g.handle(C("an", "1")); g.handle(C("binh", "2")); g.handle(C("chi", "1"))
     assert g.vote["counts"] == [1, 2, 0]
     clock.t += 10.1; g.tick()
-    assert g.vote_mode == "vi2ko" and g.q["mode"] == "vi2ko" and g.state()["vote"] is None
+    s = g.state()
+    assert s["phase"] == "question" and s["monster"]["floor"] == 2 and g.monster["traits"] == [doors[1]]
+    assert s["vote"] is None and any(f["kind"] == "vote" for f in g.feed)
+    assert g.monster["hp"] >= 30 and g.bot_lines[-1]["mood"] == "wow"   # quái mới xuất hiện
 
 
 def test_join_throttle():
@@ -303,24 +325,22 @@ def test_join_throttle():
 def test_api_queue_stats_weekly(client):
     c = client
     c.put("/api/config", json={"hansong_url": "http://hansong.test", "hansong_password": "pw",
-                               "game": {"boss_every": 0, "listen_every": 0}})
+                               "game": {"boss_every": 0, "turns": 20}})
     c.post("/api/connect", json={"mode": "mock"})
     c.post("/api/game", json={"action": "pause"})
     c.post("/api/game", json={"action": "reset"})
     c.post("/api/game", json={"action": "start"})
     assert main.GAME.phase == "question"
-    assert c.post("/api/game", json={"action": "boss"}).json()["next_special"] == "boss"
+    assert c.post("/api/game", json={"action": "boss"}).json()["force_boss"]
+    assert c.post("/api/game", json={"action": "stealth"}).status_code == 200 and main.GAME.force_trait == "stealth"
     assert c.post("/api/game", json={"action": "nope"}).status_code == 400
     c.post("/api/mock", json={"type": "gift", "name": "Fan", "count": 2, "diamonds": 50}).raise_for_status()
     c.post("/api/mock", json={"name": "Vy", "text": "ABCD"[main.GAME.q["answer"]]})
     c.post("/api/game", json={"action": "skip"})
     st = c.get("/api/stats").json()
     assert st["recent"][0]["answered"] == 1 and st["by_kind"]
-    assert db.q1("SELECT diamonds FROM live_players WHERE user_id='mock:Fan'")["diamonds"] == 100
-    assert live.weekly_fans(3)[0]["name"] == "Fan"
+    assert db.q1("SELECT diamonds, score FROM live_players WHERE user_id='mock:Fan'") == {"diamonds": 100, "score": 0}
     assert any(r["name"] == "Vy" for r in live.weekly_top(5))
-    c.post("/api/game", json={"action": "skip"})
-    assert main.GAME.special == "boss"
 
 
 # ---------------------------------------------------------------- AI + dạng bài mới
@@ -380,7 +400,6 @@ def test_new_question_kinds():
 def test_cloze_round_hides_romanization():
     items = {"cloze": {10: {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요"]}}, "trans": {}}
     g = live.LiveGame(lambda recent, cfg: live.make_question("cloze", AIW, recent, items), clock=Clock(), persist=False)
-    g.configure({"boss_every": 0, "listen_every": 0})
     g.start()
     q = g.state()["question"]
     assert q["mode"] == "cloze" and q["word"]["romanization"] == "" and q["hint"] == "Hãy đợi ở đây."
@@ -435,20 +454,14 @@ def test_bot_parse_ask():
 
 def test_bot_reacts_and_queues_asks():
     g, clock = make_game()
-    g.configure({"boss_every": 0, "listen_every": 0})
     g.start()
-    assert g.bot_lines[-1]["mood"] == "talk"                      # chào câu mới
+    assert g.bot_lines[-1]["mood"] == "wow" and g.monster["name"] in g.bot_lines[-1]["text"]   # quái xuất hiện
     g.handle(C("an", "bot ơi 안녕 là gì"))
     g.handle(C("an", "bot ơi hỏi tiếp"))                          # cùng người trong 40 giây: bỏ qua
     assert [a["text"] for a in g.bot_asks] == ["안녕 là gì"] and "an" not in g.players  # câu hỏi bot không phải đáp án
     clock.t += 15.5; g.tick()                                      # còn <= 5 giây -> giục
     assert g.bot_lines[-1]["mood"] == "hurry"
-    n = g.bot_seq
-    g.handle({"type": "gift", "user": {"id": "u", "name": "Lan"}, "count": 1, "gift_name": "Rose", "diamonds": 1})
-    assert g.bot_seq == n                                          # quà nhỏ ngay sau câu giục: nhường
-    g.handle({"type": "gift", "user": {"id": "u", "name": "Lan"}, "count": 1, "gift_name": "Donut", "diamonds": 30})
-    assert g.bot_lines[-1]["mood"] == "dance" and "Lan" in g.bot_lines[-1]["text"]   # quà lớn: luôn cảm ơn
-    clock.t += 15; g.tick()
+    clock.t += 5; g.tick()
     assert g.phase == "reveal" and g.bot_lines[-1]["mood"] == "sad"   # không ai trả lời
     g.configure({"bot": 0})
     n = g.bot_seq
@@ -458,7 +471,6 @@ def test_bot_reacts_and_queues_asks():
 
 def test_bot_reply_never_leaks_answer_during_question():
     g, clock = make_game()
-    g.configure({"boss_every": 0, "listen_every": 0})
     g.start()
     right = g.q["options"][g.q["answer"]]                         # "trường học"
     g.bot_reply("an", "학교 là gì", f"학교 nghĩa là {right} nha!")
@@ -494,7 +506,7 @@ def test_ai_classify_credit_errors():
 
 def test_support_line_and_ai_down_flow():
     g, clock = make_game()
-    g.configure({"boss_every": 0, "listen_every": 0, "support_every": 2})
+    g.configure({"support_every": 2})
     g.start(); g.skip()
     assert g.bot_lines[-1]["mood"] != "love"                        # câu 1: chưa mời
     g.skip(); g.skip()
@@ -653,28 +665,19 @@ def test_grouped_greetings():
     assert "Vy" in g.bot_lines[-1]["text"] and g.bot_lines[-1]["mood"] == "wave"
 
 
-def test_avatar_recent_answers_and_round_final():
-    g, clock = make_game()
-    g.configure({"round_len": 3, "boss_every": 0, "listen_every": 0, "board_every": 0})
+def test_boss_floor_and_levels():
+    assert [live.level_of(x) for x in (0, 39, 40, 160, 640)] == [1, 1, 2, 3, 5]
+    assert live.title_of(1) == ("🌱", "Tân binh") and live.title_of(6) == ("🛡", "Hiệp sĩ") and live.title_of(25)[1] == "Huyền thoại"
+    g, clock = make_game(turns=1, boss_every=2)
     g.start()
-    av = "https://p16.tiktokcdn.com/a.webp"
-    g.handle({"type": "comment", "user": {"id": "an", "name": "An", "avatar": av}, "text": "ABCD"[g.q["answer"]]})
-    s = g.state()
-    assert s["recent_ans"][0] == {"name": "An", "avatar": av, "letter": "ABCD"[g.q["answer"]], "seq": 1}
-    assert s["top"][0]["avatar"] == av and s["round_info"] == {"no": 1, "q": 1, "len": 3}
-    g.skip(); g.skip()                                                # câu 2
-    assert g.state()["recent_ans"] == []
-    g.skip(); g.skip()                                                # câu 3 = chung kết vòng
-    assert g.special == "final" and g.state()["question"]["mult"] == 3 and g.q_duration == 12
-    g.handle(C("binh", "ABCD"[g.q["answer"]]))
-    assert g.players["binh"]["round_score"] == 25 * 3
-    clock.t += 12.1; g.tick(); clock.t += 5.1; g.tick()
-    s = g.state()
-    assert s["phase"] == "board" and s["round_end"]["no"] == 1 and s["round_end"]["king"]["name"] == "binh"
-    assert [p["name"] for p in s["round_end"]["podium"]] == ["binh", "An"]
-    assert "binh" in g.bot_lines[-1]["text"] and g.bot_lines[-1]["mood"] == "dance"
-    clock.t += 14.1; g.tick()                                         # sang vòng 2
-    s = g.state()
-    assert s["round_info"]["no"] == 2 and s["round_info"]["q"] == 1 and s["round_end"] is None
-    assert all(p["round_score"] == 0 for p in g.players.values())
-    assert next(p for p in s["top"] if p["name"] == "binh")["crown"]  # Vua vòng giữ vương miện
+    answer(g, "an"); answer(g, "binh")
+    g.skip(); g.skip()
+    assert g.phase == "clear" and g.state()["outcome"]["next_boss"] and g.vote is None   # trước boss: không bình chọn
+    g.skip()
+    m = g.state()["monster"]
+    assert m["boss"] and m["floor"] == 2 and m["traits"][0]["id"] == "rage" and len(m["traits"]) == 2
+    assert g.monster["max_hp"] >= 2 * 30
+    answer(g, "an", ok=False); g.skip()
+    assert g.last_result["attack"] == {"hearts": 2}                 # cuồng nộ: mất 2 tim
+
+

@@ -3,27 +3,34 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HanSong LIVE</title>
+<title>Săn Quái Chữ · HanSong LIVE</title>
+<link rel="stylesheet" href="/static/game/font/font.css">
 <link rel="stylesheet" href="/static/overlay.css">
 <link rel="stylesheet" href="/static/bot.css">
 </head>
 <body>
 <div id="stage" class="stage">
-  <div class="spot"></div>
+  <!-- HUD: ải + vùng, tim chung, mốc tim/chia sẻ, kỷ lục -->
+  <header class="hud" id="hud"></header>
 
-  <!-- HUD: tiến độ vòng + các mốc chung của phòng -->
-  <header class="hud">
-    <div class="round" id="round"></div>
-    <div class="chips" id="chips"></div>
-  </header>
+  <!-- sàn đấu: phần tử giữ nguyên giữa các lần vẽ để hoạt cảnh quái không chạy lại -->
+  <section class="arena" id="arena">
+    <div class="bg" id="arenaBg"></div>
+    <div class="hp" id="hp"></div>
+    <div class="panel" id="panel"></div>
+    <div class="mon" id="mon"><div class="mon-inner" id="monInner"></div></div>
+    <div class="banner" id="banner"></div>
+    <div class="fx" id="fx"></div>
+  </section>
 
   <section id="main" class="main"></section>
 
-  <!-- làn bot: dải "vừa trả lời" / mẹo chơi; bong bóng thoại của Hami hiện đè lên làn này -->
+  <!-- làn bot: dải "vừa ra đòn" / mẹo chơi; bong bóng thoại của Hami hiện đè lên làn này -->
   <div class="lane" id="lane"><div class="ticker" id="ticker"></div><div class="tips" id="tips"></div></div>
 
   <div class="reserve"></div>
 
+  <div id="flash" class="flash"></div>
   <div id="splash" class="splash hidden"></div>
   <div id="confetti" class="confetti"></div>
   <div id="hami" class="hami hidden"></div>
@@ -35,6 +42,7 @@
 <audio id="snd" preload="auto"></audio>
 <script src="/static/sfx.js"></script>
 <script src="/static/bot.js"></script>
+<script src="/static/monster.js"></script>
 <script src="/static/overlay.js"></script>
 </body>
 </html>

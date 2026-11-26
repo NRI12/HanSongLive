@@ -1,6 +1,6 @@
 "use strict";
-/* Hiệu ứng âm thanh tự tổng hợp bằng WebAudio (không dùng file, không lo bản quyền).
-   SFX.tick() · whoosh() · pop() · ding() · buzz() · sparkle() · fanfare(big) · drum()
+/* Hiệu ứng âm thanh: phần lớn tự tổng hợp bằng WebAudio, cộng vài tiếng đấm/chém/xu từ Kenney (CC0, static/game/sfx).
+   SFX.tick() · whoosh() · pop() · ding() · buzz() · sparkle() · fanfare(big) · drum() · sample(name, vol)
    Âm lượng nhỏ để không lấn giọng đọc từ vựng và giọng Hami. */
 const SFX = (() => {
   let ctx = null, master = null, enabled = true;
@@ -42,8 +42,25 @@ const SFX = (() => {
     s.start(c.currentTime + t0);
   }
 
+  // tiếng mẫu: tải trước 1 lần, giải mã khi đã có AudioContext
+  const SAMPLES = ["hit1", "hit2", "hit3", "crit", "hurt", "block", "coins", "draw", "slice", "door"];
+  const raw = {}, decoded = {};
+  for (const n of SAMPLES) fetch(`/static/game/sfx/${n}.ogg`).then((r) => r.ok ? r.arrayBuffer() : null).then((b) => { if (b) raw[n] = b; }).catch(() => {});
+  function sample(name, vol = 0.6) {
+    const c = ac(); if (!c || !enabled) return;
+    const go = (buf) => {
+      const s = c.createBufferSource(), g = c.createGain();
+      g.gain.value = vol; s.buffer = buf; s.connect(g); g.connect(master); s.start();
+    };
+    if (decoded[name]) return go(decoded[name]);
+    if (!raw[name]) return;
+    const b = raw[name]; delete raw[name];
+    c.decodeAudioData(b).then((buf) => { decoded[name] = buf; go(buf); }).catch(() => {});
+  }
+
   return {
     set(on) { enabled = !!on; },
+    sample,
     tick(urgent) { tone(urgent ? 1320 : 990, 0, 0.06, { type: "square", vol: 0.18 }); },
     whoosh() { noise(0, 0.35, { vol: 0.35, hp: 400, lp: 5000 }); tone(300, 0, 0.35, { slide: 3, vol: 0.12, type: "triangle" }); },
     pop() { tone(660 + Math.random() * 220, 0, 0.07, { type: "triangle", vol: 0.22, slide: 1.6 }); },

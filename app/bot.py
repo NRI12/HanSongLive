@@ -29,6 +29,20 @@ LINES = {
     "reveal_none": ["Chưa ai ra đòn cả... comment A/B/C/D để đánh quái nha 🥺"],
     "reveal_hit": ["Trúng {dmg} sát thương! Quái còn {hp} máu 💪", "Đánh hay lắm! Cả phòng gây {dmg} sát thương ⚔️"],
     "reveal_crit": ["{name} chí mạng! Nhanh như chớp ⚡", "Đòn đầu tiên của {name} đau lắm đó ⚡"],
+    # khen người trả lời đúng (gọi tên); {crit} = người nhanh nhất
+    "cheer1": ["{a} đúng rồi! Giỏi quá đi 👏", "Chuẩn luôn {a} ơi! Đòn đẹp lắm ⚔️", "{a} trả lời đúng, quái đau lắm đó 💪"],
+    "cheer1_crit": ["{a} vừa đúng vừa nhanh, CHÍ MẠNG luôn ⚡", "Nhanh như chớp, {a} chí mạng rồi ⚡"],
+    "cheer2": ["{a} và {b} đúng rồi! Phối hợp đỉnh quá 👏", "Giỏi lắm {a} với {b}! {a} nhanh nhất, chí mạng ⚡"],
+    "cheerN": ["{a}, {b} và {n} bạn nữa trả lời đúng! Cả phòng giỏi quá 👏",
+               "{a} nhanh nhất, chí mạng! {b} và {n} bạn nữa cũng đúng rồi 🎉",
+               "Wow, {total} bạn trả lời đúng! {a} ra đòn đầu tiên ⚡"],
+    # bảng xếp hạng phiên này
+    "top_new": ["{name} vừa vượt lên dẫn đầu với {score} điểm! 👑", "Đổi ngôi rồi! {name} lên top 1 👑",
+                "{name} chiếm top 1 rồi kìa, ai đuổi kịp không? 👑"],
+    "top_now": ["Đang dẫn đầu là {name} với {score} điểm 👑 Ai vượt được không?",
+                "Top 1 vẫn là {name}, {score} điểm! Cố lên cả nhà 💪"],
+    "top_now2": ["{name} đang giữ top 1 đó, {second} bám sát phía sau nha 🔥",
+                 "{name} dẫn đầu, {second} đứng thứ hai! Còn kịp lật kèo đó 🔥"],
     "hit_room": ["Ui da! Quái phản đòn, mất {lose} tim 😵 Còn {hearts} tim thôi!", "Đánh trượt nhiều quá, quái đánh lại rồi 😱 Còn {hearts} tim!"],
     "kill": ["Hạ gục {mon}! {name} tung đòn kết liễu 🎉", "{mon} gục rồi! MVP là {mvp} 🏆"],
     "kill_boss": ["👑 BOSS {mon} đã bị hạ! Cả phòng đỉnh quá 🎉🎉", "Hạ boss rồi! {name} ra đòn cuối, {mvp} là MVP 👑"],
@@ -59,12 +73,13 @@ MOOD = {"q": "talk", "q_listen": "talk", "q_cloze": "talk", "q_trans": "talk", "
         "fail": "sad", "door_vote": "talk", "levelup": "dance", "streak": "wow", "streak_lost": "sad",
         "follow": "love", "share": "love", "like_goal": "dance", "share_goal": "love", "support": "love",
         "ai_broke": "sad", "ai_key": "sad", "ai_off": "sad", "ai_back": "dance",
-        "greet1": "wave", "greet2": "wave", "greetN": "wave"}
+        "greet1": "wave", "greet2": "wave", "greetN": "wave",
+        "cheer1": "happy", "cheer1_crit": "wow", "cheer2": "happy", "cheerN": "dance", "top_new": "wow", "top_now": "happy", "top_now2": "happy"}
 
 
 def line(kind: str, **kw) -> tuple[str, str]:
     """(text, mood). Tên người xem được cắt ngắn để bong bóng không bị tràn."""
-    kw = {k: (str(v)[:18] + "…" if k in ("name", "a", "b", "mvp") and len(str(v)) > 19 else v) for k, v in kw.items()}
+    kw = {k: (str(v)[:18] + "…" if k in ("name", "a", "b", "mvp", "second") and len(str(v)) > 19 else v) for k, v in kw.items()}
     return random.choice(LINES[kind]).format(**kw), MOOD[kind]
 
 

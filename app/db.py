@@ -49,6 +49,20 @@ CREATE TABLE IF NOT EXISTS live_rounds (
   comments INTEGER,
   viewers INTEGER
 );
+CREATE TABLE IF NOT EXISTS live_viewers (
+  user_id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  first_seen TEXT NOT NULL,
+  last_seen TEXT NOT NULL,
+  sessions INTEGER DEFAULT 0,
+  joins INTEGER DEFAULT 0,
+  comments INTEGER DEFAULT 0,
+  likes INTEGER DEFAULT 0,
+  shares INTEGER DEFAULT 0,
+  follows INTEGER DEFAULT 0,
+  gifts INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS live_viewers_last ON live_viewers(last_seen);
 """
 
 

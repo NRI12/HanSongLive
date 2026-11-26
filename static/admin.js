@@ -31,7 +31,8 @@ function render(s) {
   $("#pill").textContent = { tiktok: "TikTok", mock: "Thử", off: "Ngắt" }[st.mode] + " · " + ({ idle: "chờ", connecting: "đang kết nối", connected: "đã kết nối", disconnected: "mất kết nối", error: "lỗi" }[st.state] || st.state);
   $("#pill").className = "pill " + st.state;
   $("#status").textContent = st.detail + (st.attempt > 1 ? ` (lần ${st.attempt})` : "");
-  $("#mockCard").style.opacity = st.mode === "mock" ? 1 : .5;
+  $("#mockCard").classList.toggle("hidden", st.mode !== "mock");
+  $("#hsShort").textContent = s.hansong.error ? "· ⚠️ " + s.hansong.error : s.hansong.url ? "· ✅ đã cấu hình" : "· ❌ chưa có địa chỉ";
   const g = s.game, Q = g.question, M = g.monster, R = g.room;
   $("#gameInfo").innerHTML = `<b>${PHASE[g.phase]}</b>${g.phase !== "idle" ? ` · còn ${Math.ceil(g.remaining)}s` : ""} · đã chơi ${g.round} câu ·
     ${g.players} người chơi · ❤️ ${g.likes} · 🔁 ${g.goals.shares.value} · ➕ ${g.follows}
@@ -67,7 +68,7 @@ function render(s) {
     $("#aiProvider").value = A.provider; $("#aiModelDs").value = A.model_deepseek; $("#aiModelOa").value = A.model_openai;
     $("#aiVerify").value = A.verify ? "1" : "0";
     $("#aiAuto").value = A.auto ? "1" : "0";
-    $("#aiVoice").innerHTML = A.voices.map((v) => `<option value="${v}">${v}${v === "coral" ? " (dễ thương, mặc định)" : ""}</option>`).join("");
+    $("#aiVoice").innerHTML = A.voices.map((v) => `<option value="${v}">${v}${v === "marin" ? " (tự nhiên nhất, mặc định)" : v === "coral" ? " (dễ thương)" : ""}</option>`).join("");
     $("#aiVoice").value = A.voice;
     $("#aiDsKey").placeholder = A.has_deepseek_key ? "đã lưu · để trống = giữ nguyên" : "chưa có khoá";
     $("#aiOaKey").placeholder = A.has_openai_key ? "đã lưu · để trống = giữ nguyên" : "chưa có khoá";
@@ -85,12 +86,14 @@ document.querySelectorAll("[data-game]").forEach((b) => b.addEventListener("clic
   await api("/api/game", "POST", { action: b.dataset.game }); refresh();
 })));
 document.querySelectorAll("[data-connect]").forEach((b) => b.addEventListener("click", run(async () => {
+  if (b.dataset.connect === "tiktok") {   // tự lưu tài khoản + khoá trước khi kết nối; ô trống = giữ giá trị cũ
+    const user = $("#ttUser").value.trim(), key = $("#ttKey").value.trim();
+    if (key && !key.startsWith("euler_")) throw new Error("Khoá ký Euler phải bắt đầu bằng euler_");
+    if (user || key) await api("/api/config", "PUT", { tiktok_username: user || null, tiktok_sign_key: key || null });
+    $("#ttKey").value = ""; formLoaded = false;
+  }
   await api("/api/connect", "POST", { mode: b.dataset.connect }); refresh();
 })));
-$("#saveTT").addEventListener("click", run(async () => {
-  await api("/api/config", "PUT", { tiktok_username: $("#ttUser").value, tiktok_sign_key: $("#ttKey").value || null });
-  $("#ttKey").value = ""; formLoaded = false; toast("Đã lưu ✓");
-}));
 $("#saveHS").addEventListener("click", run(async () => {
   await api("/api/config", "PUT", { hansong_url: $("#hsUrl").value, hansong_password: $("#hsPw").value || null });
   $("#hsPw").value = ""; formLoaded = false; toast("Đã lưu ✓");
@@ -134,6 +137,16 @@ $("#loadStats").addEventListener("click", run(async () => {
     <table class="tbl">${row(["Lúc", "Kiểu", "Trả lời", "Đúng", "Comment", "Người xem"], "th")}
     ${st.recent.map((r) => row([r.at.slice(11, 16), KIND[r.special || r.mode] || r.mode, r.answered, r.correct, r.comments, r.viewers])).join("")}</table>`;
 }));
+
+const loadViewers = run(async () => {
+  const v = await api("/api/viewers?limit=100&order=" + $("#vOrder").value), S = v.summary;
+  $("#vSum").innerHTML = `Tổng <b>${S.total}</b> người · hôm nay <b>${S.today}</b> · đã comment ${S.commenters} · quay lại từ 2 buổi ${S.regulars}`;
+  const row = (cells, tag = "td") => "<tr>" + cells.map((c) => `<${tag}>${esc(c)}</${tag}>`).join("") + "</tr>";
+  $("#vList").innerHTML = v.rows.length ? `<table class="tbl">${row(["Tên", "Lần cuối", "Buổi", "💬", "❤️", "🔁", "➕", "🎁"], "th")}
+    ${v.rows.map((r) => row([r.name, r.last_seen.slice(5, 16), r.sessions, r.comments, r.likes, r.shares, r.follows, r.gifts])).join("")}</table>` : "";
+});
+$("#vLoad").addEventListener("click", loadViewers);
+$("#vOrder").addEventListener("change", loadViewers);
 
 $("#aiSave").addEventListener("click", run(async () => {
   await api("/api/config", "PUT", {

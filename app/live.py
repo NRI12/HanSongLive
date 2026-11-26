@@ -48,13 +48,14 @@ DEFAULT_CONFIG = {
     "bot_voice": 1,        # Hami đọc to câu thoại bằng giọng dễ thương (OpenAI TTS, cần OpenAI key)
     "sfx": 1,              # hiệu ứng âm thanh trên overlay (đấm, chém, tích tắc…)
     "support_every": 12,   # cứ N câu Hami mời thả tim / follow / share 1 lần. 0 = tắt
+    "read_wait_s": 8,      # câu mới: đồng hồ chờ overlay đọc đề + Hami nói xong, tối đa N giây. 0 = chạy ngay
     "source": "all",       # nguồn từ: all | today | due | hard | new | mastered
     "mode": "all",         # ko2vi | vi2ko | mix (2 kiểu trên) | cloze | trans | hanviet | all (trộn mọi kiểu đang có)
 }
 LIMITS = {"question_s": (8, 120), "reveal_s": (3, 30), "clear_s": (4, 40), "hearts": (1, 20), "turns": (1, 20),
           "boss_every": (0, 50), "like_goal": (0, 100000), "share_goal": (0, 10000), "vote": (0, 1),
           "live_counts": (0, 1), "safe": (0, 1), "safe_top": (0, 30), "safe_bottom": (40, 100), "bot": (0, 1),
-          "bot_ai": (0, 1), "bot_voice": (0, 1), "support_every": (0, 100), "sfx": (0, 1)}
+          "bot_ai": (0, 1), "bot_voice": (0, 1), "support_every": (0, 100), "sfx": (0, 1), "read_wait_s": (0, 20)}
 SOURCES = ("all", "today", "due", "hard", "new", "mastered")
 MODES = ("ko2vi", "vi2ko", "mix", "cloze", "trans", "hanviet", "all")
 KINDS = ("ko2vi", "vi2ko", "cloze", "trans", "hanviet")   # các kiểu câu thật sự
@@ -297,6 +298,7 @@ class LiveGame:
         self.cfg = dict(DEFAULT_CONFIG)
         self.phase = "idle"          # idle | question | reveal | clear (hạ quái) | fail (cả phòng bị hạ)
         self.phase_end = 0.0
+        self.read_until = 0.0     # câu hỏi: trước mốc này đồng hồ đứng yên (đang đọc đề)
         self.qid = 0
         self.q: dict | None = None
         self.q_duration = 0
@@ -349,6 +351,8 @@ class LiveGame:
         self.ai_down = ""                        # "" | credit | key: API AI hỏng thật (main.py báo vào)
         self.greet_buf: list[dict] = []          # người mới vào phòng chờ được Hami chào (gom nhóm)
         self.greet_at = -1e9
+        self.leader: str | None = None   # top 1 phiên này (Hami báo khi đổi ngôi)
+        self.leader_said = 0
         self.recent_ans: deque = deque(maxlen=6)   # dải "vừa ra đòn" trên overlay
         self.ai_off_at = -1e9
         if persist:
@@ -507,6 +511,7 @@ class LiveGame:
         with self.lock:
             self.players.clear()
             self._saved.clear()
+            self.leader, self.leader_said = None, 0
             self.rounds = 0
             self.likes = self.like_mark = 0
             self.shares = self.share_mark = 0
@@ -620,7 +625,9 @@ class LiveGame:
         if "fast" in m["traits"]:
             dur = max(8, round(dur * FAST_MULT))
         self.q_duration = dur
-        self.phase_end = self.clock() + dur
+        # chờ overlay đọc đề + Hami nói xong (overlay gọi ready()); quá read_wait_s thì đồng hồ tự chạy
+        self.read_until = self.clock() + self.cfg["read_wait_s"]
+        self.phase_end = self.read_until + dur
         self.hurried = False
         if spawned:
             return                          # vừa nói câu "quái xuất hiện"
@@ -630,6 +637,16 @@ class LiveGame:
             self._bot("q_" + q["mode"])
         else:
             self._bot("q", mon=m["name"])
+
+    def ready(self, qid: int) -> bool:
+        """Overlay báo đã đọc đề xong: bắt đầu đếm ngược ngay. Gọi trùng / câu cũ thì bỏ qua."""
+        with self.lock:
+            now = self.clock()
+            if self.phase != "question" or qid != self.qid or now >= self.read_until:
+                return False
+            self.read_until = now
+            self.phase_end = now + self.q_duration
+            return True
 
     def _reveal(self):
         q, m = self.q, self.monster
@@ -685,23 +702,51 @@ class LiveGame:
         elif self.hearts <= 0:
             self.after = "fail"
             self._fail()
-        elif attack:
-            self._bot("hit_room", lose=attack["hearts"], hearts=self.hearts)
         elif not total:
             self._bot("reveal_none")
-        elif leveled:
-            p = leveled[-1][0]
-            self._bot("levelup", name=p["name"], lv=p["level"], title=title_of(p["level"])[1])
         else:
-            first = hits[0]
-            self._bot("reveal_crit" if random.random() < .5 else "reveal_hit", name=first["name"],
-                      dmg=self.last_result["dmg"], hp=m["hp"])
+            if hits:                        # khen người đúng, gọi tên (người đầu tiên = nhanh nhất, chí mạng)
+                names = [h["name"] for h in hits]
+                if len(names) == 1:
+                    self._bot("cheer1_crit" if random.random() < .5 else "cheer1", a=names[0])
+                elif len(names) == 2:
+                    self._bot("cheer2", a=names[0], b=names[1])
+                else:
+                    self._bot("cheerN", a=names[0], b=names[1], n=len(winners) - 2, total=len(winners))
+            if attack:
+                self._bot("hit_room", lose=attack["hearts"], hearts=self.hearts)
+            if leveled:
+                p = leveled[-1][0]
+                self._bot("levelup", name=p["name"], lv=p["level"], title=title_of(p["level"])[1])
+            else:
+                self._announce_top()
         for line in self.bot_hold:
             self._bot_raw(line["text"], line["mood"])
         self.bot_hold = []
         every = self.cfg["support_every"]
         if every and self.rounds % every == 0 and not killed:
             self._bot("support")
+
+    TOP_EVERY = 5   # không đổi top 1 thì cứ N câu nhắc lại người đang dẫn đầu
+
+    def _announce_top(self):
+        """Báo khi có người vượt lên top 1 phiên này, hoặc định kỳ nhắc ai đang dẫn đầu."""
+        top = sorted((p for p in self.players.values() if p["score"] > 0), key=lambda p: (-p["score"], p["name"]))
+        if not top:
+            return
+        lead = top[0]
+        if lead["id"] != self.leader:
+            changed = self.leader is not None
+            self.leader, self.leader_said = lead["id"], self.rounds
+            if changed:
+                self._bot("top_new", name=lead["name"], score=lead["score"])
+                return
+        if self.rounds - self.leader_said >= self.TOP_EVERY:
+            self.leader_said = self.rounds
+            if len(top) > 1 and random.random() < .5:
+                self._bot("top_now2", name=lead["name"], second=top[1]["name"])
+            else:
+                self._bot("top_now", name=lead["name"], score=lead["score"])
 
     def _mvp(self) -> list[dict]:
         order = sorted(self.mon_dmg.items(), key=lambda kv: (-kv[1], self.players[kv[0]]["name"]))
@@ -974,7 +1019,8 @@ class LiveGame:
                     "answer": self.q["answer"] if reveal else None,
                     "hint": self.q.get("hint", "") if not listen else "",
                     "audio_q": self.q.get("audio_q", "ko_word" if self.q["prompt_lang"] == "ko" else "vi_word"),
-                    "audio_reveal": self.q.get("audio_reveal", "mix"),
+                    # hiện đáp án: đọc ngôn ngữ còn lại (không dùng bản `mix` 2 tai, nghe như bị lặp)
+                    "audio_reveal": self.q.get("audio_reveal", "vi_word" if self.q["prompt_lang"] == "ko" else "ko_word"),
                     "word": self.q["word"] if reveal else
                     {"romanization": self.q["word"]["romanization"]
                      if self.q["mode"] in ("ko2vi", "hanviet") and not listen else ""},
@@ -996,7 +1042,11 @@ class LiveGame:
             zone_floor = self.floor if not m else m["floor"]
             out = {
                 "phase": self.phase,
-                "remaining": max(0.0, round(self.phase_end - now, 2)) if self.phase != "idle" else 0,
+                # đang đọc đề: đồng hồ đứng yên ở mức đầy
+                "remaining": (0 if self.phase == "idle" else
+                              min(self.q_duration, max(0.0, round(self.phase_end - now, 2))) if self.phase == "question"
+                              else max(0.0, round(self.phase_end - now, 2))),
+                "reading": self.phase == "question" and now < self.read_until,
                 "duration": {"question": self.q_duration, "reveal": cfg["reveal_s"], "clear": cfg["clear_s"],
                              "fail": max(4, cfg["clear_s"] - 4)}.get(self.phase, 0),
                 "question": q,

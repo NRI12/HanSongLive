@@ -411,34 +411,62 @@ Hami.mount($("#hami"), $("#hamiBubble"));
 snd.addEventListener("play", () => Hami.speaking(true));
 ["pause", "ended", "error"].forEach((e) => snd.addEventListener(e, () => Hami.speaking(false)));
 
-/* giọng Hami: audio riêng; nếu đang đọc từ vựng thì chờ đọc xong (tối đa 6 giây) để không chồng tiếng */
+/* Quy tắc: đang có âm thanh (đọc từ vựng, hiệu ứng) thì Hami KHÔNG được nói.
+   - câu thoại mới (bong bóng + giọng) xếp hàng ở botQueue, chỉ đưa cho Hami khi âm thanh đã im;
+   - từ vựng bắt đầu phát mà Hami đang nói thì cắt giọng Hami. */
+let sndPending = false;   // âm đề đã hẹn phát (setTimeout) nhưng chưa phát
+const audioBusy = () => sndPending || (!snd.paused && !snd.ended) || (typeof SFX !== "undefined" && SFX.busy());
 const botSnd = new Audio();
 botSnd.preload = "auto";
+let botPending = false;   // đã gọi botVoice nhưng tiếng chưa phát / chưa xong (đang tải, đang chờ từ vựng đọc xong)
+["playing", "ended", "error", "pause"].forEach((e) => botSnd.addEventListener(e, () => { if (e !== "playing") botPending = false; }));
 botSnd.addEventListener("playing", () => {
   Hami.speaking(true);
   if (isFinite(botSnd.duration)) Hami.extend(botSnd.duration * 1000 + 600);
 });
 ["pause", "ended", "error"].forEach((e) => botSnd.addEventListener(e, () => Hami.speaking(false)));
+snd.addEventListener("play", () => { if (!botSnd.paused) botSnd.pause(); });   // từ vựng được ưu tiên
 function botVoice(seq) {
-  botSnd.src = q(`/audio/bot/${seq}.mp3`);
-  const go = (tries) => {
-    if (!snd.paused && !snd.ended && tries > 0) return setTimeout(() => go(tries - 1), 300);
-    botSnd.play().catch(() => {});
+  botPending = true;
+  botSnd.src = q(`/audio/bot/${seq}.mp3?b=${boot}`);   // seq quay về 0 sau khi khởi động lại: tránh cache câu cũ
+  const t0 = Date.now();
+  const go = () => {
+    if (audioBusy()) {
+      if (Date.now() - t0 > 8000) { botPending = false; return; }   // chờ quá lâu: bỏ giọng câu này
+      return setTimeout(go, 150);
+    }
+    botSnd.play().catch(() => { botPending = false; });
   };
-  go(20);
+  go();
+}
+
+const botQueue = [];      // câu thoại chờ âm thanh im mới nói
+let botTimer = null;
+function pumpBot() {
+  clearTimeout(botTimer); botTimer = null;
+  while (botQueue.length && Date.now() - botQueue[0].t > 12000) botQueue.shift();   // câu đã cũ: bỏ
+  if (!botQueue.length) return;
+  if (audioBusy() || (cfg.bot_voice && (botPending || !botSnd.paused))) { botTimer = setTimeout(pumpBot, 150); return; }
+  const l = botQueue.shift();
+  Hami.say(l.text, l.mood, cfg.bot_voice ? () => botVoice(l.seq) : null);
+  if (botQueue.length) botTimer = setTimeout(pumpBot, 150);
 }
 
 function renderBot(b) {
   $("#hami").classList.toggle("hidden", !b);
-  if (!b) { $("#hamiBubble").classList.remove("show"); return; }
+  if (!b) { $("#hamiBubble").classList.remove("show"); botQueue.length = 0; return; }
   Hami.base(b.mood);
   const fresh = botSeq >= 0;
   for (const l of b.lines) {
     if (l.seq <= botSeq) continue;
     botSeq = l.seq;
-    if (fresh) Hami.say(l.text, l.mood, cfg.bot_voice ? () => botVoice(l.seq) : null);   // vừa mở overlay: không nói lại câu cũ
+    if (!fresh) continue;                                  // vừa mở overlay: không nói lại câu cũ
+    botQueue.push({ ...l, t: Date.now() });
+    if (botQueue.length > 3) botQueue.shift();
   }
   if (botSeq < 0) botSeq = 0;
+  // chạy sau phần âm thanh của cùng lượt render (âm đề được hẹn ở cuối render) để Hami không chen vào trước
+  if (botQueue.length && !botTimer) botTimer = setTimeout(pumpBot, 50);
 }
 
 function renderGuide() {
@@ -523,23 +551,49 @@ function render(s) {
   }
   if (feedSeq < 0) feedSeq = 0;
 
-  // âm thanh: câu mới -> đọc đề (chờ màn giới thiệu quái nếu vừa xuất hiện); hiện đáp án -> bản 2 luồng
+  // âm thanh: câu mới -> đọc đề (chờ màn giới thiệu quái nếu vừa xuất hiện); hiện đáp án -> đọc ngôn ngữ còn lại
   const Q = s.question;
   if (Q) {
     const key = Q.id + ":" + s.phase;
     if (key !== last.sound) {
       const fresh = last.sound !== "";
       last.sound = key;
-      if (s.phase === "question" && Q.audio_q) setTimeout(() => play(`/audio/${Q.word_id}/${Q.audio_q}.mp3`), fresh && entered ? 1300 : 300);
-      else if (s.phase === "reveal") play(`/audio/${Q.word_id}/${Q.audio_reveal || "mix"}.mp3`);
+      if (s.phase === "question" && s.reading) waitRead(Q.id, Q.audio_q ? (fresh && entered ? 1300 : 300) : 0);
+      if (s.phase === "question" && Q.audio_q) {
+        sndPending = true;                  // giữ Hami im cho tới khi đọc đề xong
+        setTimeout(() => { sndPending = false; play(`/audio/${Q.word_id}/${Q.audio_q}.mp3`); }, fresh && entered ? 1300 : 300);
+      }
+      else if (s.phase === "reveal" && Q.audio_reveal && Q.audio_reveal !== "none") play(`/audio/${Q.word_id}/${Q.audio_reveal}.mp3`);
     }
   }
 }
 
+/* câu mới: chờ đọc đề + Hami nói xong (cả tiếng lẫn bong bóng) rồi báo server bắt đầu đếm ngược.
+   Server tự chạy đồng hồ sau read_wait_s nếu không nhận được báo (vd. trình duyệt chặn âm thanh). */
+let readQid = 0;
+function waitRead(qid, audioDelay) {
+  readQid = qid;
+  const t0 = Date.now(), soundStart = t0 + audioDelay + 700;   // chờ âm đề kịp bắt đầu phát
+  const quiet = () => !audioBusy() && (botSnd.paused || botSnd.ended) && !botPending && !botQueue.length && Hami.idle();
+  const check = () => {
+    if (readQid !== qid) return;
+    if (Date.now() < soundStart || !quiet()) return setTimeout(check, 200);
+    fetch(q(`/api/overlay/ready?qid=${qid}`), { method: "POST" }).catch(() => {});
+  };
+  setTimeout(check, 200);
+}
+
+let boot = null;
 async function poll() {
   try {
     const r = await fetch(q("/api/overlay/state"), { credentials: "same-origin" });
-    if (r.ok) render(await r.json());
+    if (r.ok) {
+      const s = await r.json();
+      // server vừa khởi động lại: số thứ tự câu thoại/feed quay về 0 và có thể đã có JS mới -> tải lại trang
+      if (s.boot && boot && s.boot !== boot) return location.reload();
+      boot = s.boot || boot;
+      render(s);
+    }
     else if (r.status === 401) $("#main").innerHTML = `<div class="card note">⚠️ Link overlay thiếu hoặc sai token.<br>Lấy lại link trong trang /admin.</div>`;
   } catch (e) { console.error(e); /* mất mạng tạm thời: thử lại */ }
   setTimeout(poll, 400);

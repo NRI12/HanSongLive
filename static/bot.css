@@ -13,7 +13,8 @@ body:not(.safe) .hami { bottom: calc(var(--u) * 13); }
 
 /* mặt: mặc định mắt mở + cười */
 .hami .h-eyes > g, .hami .h-mouth > *, .hami .h-tear, .hami .h-sweat { display: none; }
-.hami .h-eyes-open, .hami .m-smile { display: inline; }
+/* cần ".h-eyes > .h-eyes-open" để mạnh hơn ".h-eyes > g" ở trên, nếu không mắt bị ẩn ở trạng thái thường */
+.hami .h-eyes > .h-eyes-open, .hami .m-smile { display: inline; }
 .hami.talking .m-smile, .hami.speaking .m-smile { animation: h-mouth-a .26s steps(1) infinite; display: inline; }
 .hami.talking .m-open, .hami.speaking .m-open { animation: h-mouth-b .26s steps(1) infinite; display: inline; }
 
@@ -51,6 +52,23 @@ body:not(.safe) .hami { bottom: calc(var(--u) * 13); }
 .hami[data-mood="sleep"] .h-all { animation: h-breathe 5s ease-in-out infinite; }
 .hami[data-mood="sleep"] .h-ear-l { transform: rotate(-14deg); } .hami[data-mood="sleep"] .h-ear-r { transform: rotate(14deg); }
 
+/* lúc rảnh: đi lại trong vùng trống (--wx/--wy tính bằng px từ chỗ đứng gốc, --wt thời gian đi), đảo mắt (--look),
+   vài động tác ngẫu nhiên (act-*) do bot.js bật. Lúc nói thì về chỗ gốc cạnh bong bóng. */
+.hami { transform: translate(var(--wx, 0px), var(--wy, 0px)); transition: transform var(--wt, 1.6s) ease-in-out; }
+.hami .hami-svg { transition: transform .25s; }
+.hami.face-left .hami-svg { transform: scaleX(-1); }
+.hami .h-eyes-open, .hami .h-eyes-happy { transform: translate(var(--look, 0px), var(--look-y, 0px)); transition: transform .35s ease-out; }
+.hami.walking .h-all { animation: h-walk .32s ease-in-out infinite; }
+.hami.walking .h-feet { animation: h-step .32s ease-in-out infinite; }
+.hami.act-hop .h-all { animation: h-hop .45s ease-in-out 2; }
+.hami.act-ears .h-ear-l { animation: h-ear-l .3s ease-in-out 4 alternate; }
+.hami.act-ears .h-ear-r { animation: h-ear-r .3s ease-in-out 4 alternate; }
+.hami.act-wave .h-arm-r { animation: h-wave .35s ease-in-out 4 alternate; }
+.hami.act-tilt .h-all { animation: h-tilt 1.6s ease-in-out 1; }
+.hami.act-spin .h-all { animation: h-spin .8s ease-in-out 1; }
+.hami.act-bounce .h-all { animation: h-bounce .4s ease-in-out 4; }
+.hami.act-peek .h-all { animation: h-peek 1.6s ease-in-out 1; }
+
 /* hiệu ứng bay lên */
 .hami .h-fx { position: absolute; inset: 0; overflow: visible; }
 .hami .h-fx span { position: absolute; top: 15%; font-size: calc(var(--u) * 4); animation: h-float 1.8s ease-out forwards; }
@@ -80,3 +98,11 @@ body:not(.safe) .hami-bubble { bottom: calc(var(--u) * 40); }
 @keyframes h-shake { 25% { transform: translateX(-3%); } 75% { transform: translateX(3%); } }
 @keyframes h-wave { from { transform: rotate(0); } to { transform: rotate(-70deg); } }
 @keyframes h-float { from { opacity: 1; transform: translateY(0) scale(.8); } to { opacity: 0; transform: translateY(calc(var(--u) * -22)) scale(1.2); } }
+@keyframes h-walk { 0%, 100% { transform: rotate(-4deg) translateY(0); } 50% { transform: rotate(4deg) translateY(-4%); } }
+@keyframes h-step { 50% { transform: translateY(-3%); } }
+@keyframes h-ear-l { to { transform: rotate(-18deg); } }
+@keyframes h-ear-r { to { transform: rotate(18deg); } }
+@keyframes h-tilt { 30%, 70% { transform: rotate(-12deg); } }
+@keyframes h-spin { 50% { transform: scaleX(-1) translateY(-6%); } }
+@keyframes h-bounce { 0%, 100% { transform: scale(1, 1); } 40% { transform: scale(1.06, .92) translateY(3%); } 70% { transform: scale(.96, 1.06) translateY(-6%); } }
+@keyframes h-peek { 25% { transform: translateX(-8%) rotate(-8deg); } 60% { transform: translateX(8%) rotate(8deg); } }

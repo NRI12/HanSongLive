@@ -3,7 +3,8 @@
    SFX.tick() · whoosh() · pop() · ding() · buzz() · sparkle() · fanfare(big) · drum() · sample(name, vol)
    Âm lượng nhỏ để không lấn giọng đọc từ vựng và giọng Hami. */
 const SFX = (() => {
-  let ctx = null, master = null, enabled = true;
+  let ctx = null, master = null, enabled = true, endAt = 0;   // endAt: lúc tiếng đang phát kết thúc (giây, ctx.currentTime)
+  const until = (t) => { endAt = Math.max(endAt, t); };
   function ac() {
     if (!ctx) {
       const C = window.AudioContext || window.webkitAudioContext;
@@ -29,7 +30,7 @@ const SFX = (() => {
     g.gain.exponentialRampToValueAtTime(vol, t + attack);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g); g.connect(master);
-    o.start(t); o.stop(t + dur + 0.02);
+    o.start(t); o.stop(t + dur + 0.02); until(t + dur);
   }
   function noise(t0, dur, { vol = 0.4, hp = 800, lp = 8000 } = {}) {
     const c = ac(); if (!c || !enabled) return;
@@ -39,7 +40,7 @@ const SFX = (() => {
     f1.type = "highpass"; f1.frequency.value = hp; f2.type = "lowpass"; f2.frequency.value = lp;
     g.gain.value = vol;
     s.buffer = buf; s.connect(f1); f1.connect(f2); f2.connect(g); g.connect(master);
-    s.start(c.currentTime + t0);
+    s.start(c.currentTime + t0); until(c.currentTime + t0 + dur);
   }
 
   // tiếng mẫu: tải trước 1 lần, giải mã khi đã có AudioContext
@@ -50,7 +51,7 @@ const SFX = (() => {
     const c = ac(); if (!c || !enabled) return;
     const go = (buf) => {
       const s = c.createBufferSource(), g = c.createGain();
-      g.gain.value = vol; s.buffer = buf; s.connect(g); g.connect(master); s.start();
+      g.gain.value = vol; s.buffer = buf; s.connect(g); g.connect(master); s.start(); until(c.currentTime + buf.duration);
     };
     if (decoded[name]) return go(decoded[name]);
     if (!raw[name]) return;
@@ -60,6 +61,7 @@ const SFX = (() => {
 
   return {
     set(on) { enabled = !!on; },
+    busy() { return !!ctx && ctx.currentTime < endAt; },   // đang có hiệu ứng phát (Hami chờ, không nói chồng)
     sample,
     tick(urgent) { tone(urgent ? 1320 : 990, 0, 0.06, { type: "square", vol: 0.18 }); },
     whoosh() { noise(0, 0.35, { vol: 0.35, hp: 400, lp: 5000 }); tone(300, 0, 0.35, { slide: 3, vol: 0.12, type: "triangle" }); },

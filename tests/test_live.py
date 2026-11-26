@@ -26,7 +26,7 @@ def make_game(mode="ko2vi", **cfg):
     g = live.LiveGame(pick, clock=clock, persist=False)
     # turns cao + không boss + không bình chọn: quái thường đủ máu cho nhiều câu, test luồng câu hỏi không bị màn hạ quái chen vào
     g.configure({"mode": mode, "question_s": 20, "reveal_s": 5, "clear_s": 10, "like_goal": 300, "turns": 20,
-                 "boss_every": 0, "vote": 0, **cfg})
+                 "boss_every": 0, "vote": 0, "read_wait_s": 0, **cfg})
     return g, clock
 
 
@@ -681,3 +681,65 @@ def test_boss_floor_and_levels():
     assert g.last_result["attack"] == {"hearts": 2}                 # cuồng nộ: mất 2 tim
 
 
+
+
+def test_timer_waits_for_reading_then_ready():
+    g, clock = make_game(read_wait_s=8)
+    g.start()
+    qid = g.qid
+    s = g.state()
+    assert s["reading"] and s["remaining"] == 20          # đang đọc đề: đồng hồ đứng yên ở mức đầy
+    clock.t += 3
+    assert g.state()["remaining"] == 20
+    assert not g.ready(qid + 1)                           # câu khác: bỏ qua
+    assert g.ready(qid)                                   # overlay đọc xong: bắt đầu đếm
+    assert not g.ready(qid)                               # báo trùng: bỏ qua
+    s = g.state()
+    assert not s["reading"] and s["remaining"] == 20
+    clock.t += 5
+    assert g.state()["remaining"] == 15
+    clock.t += 15.1
+    g.tick()
+    assert g.phase == "reveal"
+
+
+def test_timer_starts_alone_if_overlay_never_ready():
+    g, clock = make_game(read_wait_s=8)
+    g.start()
+    clock.t += 8
+    s = g.state()
+    assert not s["reading"] and s["remaining"] == 20
+    clock.t += 20.1
+    g.tick()
+    assert g.phase == "reveal"
+
+
+def test_bot_cheers_correct_players_even_when_room_is_hit():
+    g, clock = make_game()
+    g.start()
+    ok, bad = "ABCD"[g.q["answer"]], "ABCD"[(g.q["answer"] + 1) % 4]
+    for uid, t in (("lan", ok), ("minh", bad), ("tu", bad)):   # 1/3 đúng: quái phản đòn
+        g.handle(C(uid, t))
+    before = g.bot_seq
+    clock.t += 21
+    g.tick()
+    said = [l["text"] for l in g.bot_lines if l["seq"] > before]
+    assert any("lan" in t for t in said)                        # người đúng vẫn được khen, có tên
+    assert any("tim" in t for t in said)                        # rồi mới báo mất tim
+
+
+def test_bot_announces_new_leader():
+    g, _ = make_game()
+    g.players = {"lan": {"id": "lan", "name": "Lan", "score": 30}, "minh": {"id": "minh", "name": "Minh", "score": 10}}
+
+    def said_after(fn):
+        before = g.bot_seq
+        fn()
+        return [l["text"] for l in g.bot_lines if l["seq"] > before]
+
+    assert said_after(g._announce_top) == []                     # top 1 đầu tiên: chưa có "đổi ngôi" để báo
+    g.players["minh"]["score"] = 50
+    assert any("Minh" in t for t in said_after(g._announce_top))  # Minh vượt lên: báo ngay
+    assert said_after(g._announce_top) == []                     # không đổi: im cho tới đủ TOP_EVERY câu
+    g.rounds += g.TOP_EVERY
+    assert any("Minh" in t for t in said_after(g._announce_top))  # nhắc định kỳ người đang dẫn đầu

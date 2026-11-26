@@ -28,7 +28,7 @@ DEFAULT_AI = {
     "model_deepseek": "deepseek-flash",
     "verify": True,                  # lượt thứ 2 để kiểm tra đáp án nhiễu
     "auto": True,                    # tự tạo câu hỏi cho từ mới chưa có dữ liệu (chạy nền)
-    "voice": "coral",                # giọng OpenAI TTS của bot Hami
+    "voice": "marin",                # giọng OpenAI TTS của bot Hami (marin: giọng mới, tự nhiên nhất)
 }
 
 
@@ -125,7 +125,7 @@ TTS_INSTR = {
 }
 
 
-VOICES = ("coral", "nova", "shimmer", "sage", "alloy", "ballad", "fable", "verse", "ash", "echo", "onyx")
+VOICES = ("marin", "coral", "nova", "shimmer", "sage", "cedar", "alloy", "ballad", "fable", "verse", "ash", "echo", "onyx")
 BOT_VOICE_INSTR = (
     "Voice: Hami, a super cute, cheerful little bunny mascot hosting a Vietnamese TikTok livestream that teaches Korean. "
     "Bright, playful, slightly high-pitched young female voice, smiling while talking, warm and a bit sweet, "

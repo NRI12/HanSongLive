@@ -41,3 +41,7 @@ code { background: var(--bg); padding: 1px 5px; border-radius: 5px; }
 .tbl th { color: var(--muted); font-weight: 600; }
 label.inline { display: inline-flex; align-items: center; gap: 6px; }
 .btn:disabled { opacity: .5; cursor: default; }
+details.more { margin-top: 12px; }
+details.more > summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+details.more[open] > summary { margin-bottom: 8px; }
+.card > details.more:first-child { margin-top: 0; }

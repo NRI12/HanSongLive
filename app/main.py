@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, bot, db, live
+from . import ai, bot, db, live, viewers
 from .source import HanSongSource, SourceError
 from .tiktok import TikTokConnector
 
@@ -119,6 +119,7 @@ def run_ai_job(words: list[dict], cfg: dict, key: str, auto: bool = False):
 
 GAME = live.LiveGame(picker)
 CONNECTOR: TikTokConnector | None = None
+BOOT_ID = os.urandom(4).hex()   # mã phiên server, xem overlay_state
 STATUS = {"mode": "off", "state": "idle", "detail": "Chưa kết nối", "attempt": 0}
 LOOP: asyncio.AbstractEventLoop | None = None
 
@@ -200,11 +201,24 @@ def auto_check():
     threading.Thread(target=run_ai_job, args=(todo, cfg, key, True), daemon=True).start()
 
 
+def on_event(ev: dict):
+    """Mọi sự kiện TikTok đi qua đây: ghi sổ người xem rồi đưa vào game."""
+    try:
+        viewers.record(ev)
+    except Exception:
+        pass   # sổ người xem hỏng không được làm hỏng game
+    GAME.handle(ev)
+
+
 async def ticker():
+    last_flush = time.time()
     while True:
         try:
             await asyncio.to_thread(GAME.tick)
             bot_pump()
+            if time.time() - last_flush >= 5:
+                last_flush = time.time()
+                await asyncio.to_thread(viewers.flush)
             if time.time() >= AUTO["next"]:
                 await asyncio.to_thread(auto_check)
         except Exception as e:  # không để vòng lặp chết
@@ -224,6 +238,7 @@ async def lifespan(_app):
     t.cancel()
     if CONNECTOR:
         await CONNECTOR.stop()
+    viewers.flush()
 
 
 app = FastAPI(title="HanSongLive", lifespan=lifespan)
@@ -408,14 +423,14 @@ class ConnectReq(BaseModel):
 @app.post("/api/connect")
 async def connect(body: ConnectReq):
     global CONNECTOR
+    t = tiktok_conf()
+    if body.mode == "tiktok" and not t["username"]:   # kiểm tra trước, để lỗi không làm rớt kết nối đang chạy
+        raise HTTPException(400, "Nhập tên tài khoản TikTok trước khi kết nối")
     if CONNECTOR:
         await CONNECTOR.stop()
         CONNECTOR = None
     if body.mode == "tiktok":
-        t = tiktok_conf()
-        if not t["username"]:
-            raise HTTPException(400, "Nhập tên tài khoản TikTok trước khi kết nối")
-        CONNECTOR = TikTokConnector(t["username"], t["sign_key"], GAME.handle, set_status)
+        CONNECTOR = TikTokConnector(t["username"], t["sign_key"], on_event, set_status)
         CONNECTOR.start()
     elif body.mode == "mock":
         set_status({"mode": "mock", "state": "connected", "detail": "Chế độ thử: gửi comment giả từ bảng điều khiển",
@@ -467,7 +482,26 @@ def stats():
     return live.round_stats(20)
 
 
+@app.get("/api/viewers")
+def viewer_list(order: str = "recent", limit: int = 100):
+    viewers.flush()
+    return {"summary": viewers.summary(), "rows": viewers.listing(limit, order)}
+
+
+@app.get("/api/viewers.csv")
+def viewer_csv():
+    viewers.flush()
+    return Response(viewers.to_csv(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="nguoi-xem.csv"'})
+
+
 # ---------------------------------------------------------------- overlay
+@app.post("/api/overlay/ready")
+def overlay_ready(qid: int):
+    """Overlay đã đọc đề + Hami nói xong câu `qid`: bắt đầu đếm ngược."""
+    return {"ok": GAME.ready(qid)}
+
+
 @app.get("/api/overlay/state")
 def overlay_state():
     boards = None
@@ -475,6 +509,7 @@ def overlay_state():
         boards = {"weekly": live.weekly_top(3)}
     s = GAME.state(boards)
     s["connected"] = STATUS.get("state") == "connected"
+    s["boot"] = BOOT_ID     # đổi sau mỗi lần khởi động: overlay tự tải lại (số thứ tự câu thoại/feed đã quay về 0)
     return s
 
 
@@ -486,7 +521,7 @@ TTS_VERSION = "v1"         # đổi khi sửa BOT_VOICE_INSTR để không dùng
 
 
 def voice_path(text: str) -> str:
-    voice = ai_conf().get("voice", "coral")
+    voice = ai_conf().get("voice", "marin")
     h = hashlib.sha1(f"{TTS_VERSION}|{voice}|{text}".encode()).hexdigest()[:20]
     return os.path.join(db.DATA_DIR, "tts", f"{h}.mp3")
 
@@ -506,7 +541,7 @@ def synth(text: str) -> str | None:
             return p
         os.makedirs(os.path.dirname(p), exist_ok=True)
         try:
-            ai.tts(text, "vi", ai_conf().get("voice", "coral"), p, key, instructions=ai.BOT_VOICE_INSTR)
+            ai.tts(text, "vi", ai_conf().get("voice", "marin"), p, key, instructions=ai.BOT_VOICE_INSTR)
             TTS["detail"] = ""
         except ai.AICreditError as e:
             TTS["down_at"] = time.time()

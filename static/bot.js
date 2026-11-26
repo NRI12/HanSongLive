@@ -51,9 +51,10 @@ const Hami = (() => {
 
   function setMood(m) {
     root.dataset.mood = m;
+    if (m !== "idle" && m !== "talk") root.classList.remove("walking", ...ACTS);
     clearInterval(fxTimer);
     const fx = FX[m];
-    if (fx) { spawn(fx); fxTimer = setInterval(() => spawn(fx), m === "sleep" ? 1600 : 450); }
+    if (fx) { spawn(fx); fxTimer = setInterval(() => spawn(fx), m === "sleep" ? 2400 : 1100); }   // thưa, đỡ rối mắt
   }
   function spawn(list) {
     const box = root.querySelector(".h-fx");
@@ -72,6 +73,82 @@ const Hami = (() => {
     bubble.innerHTML = `<b class="b-name">Hami</b><span class="b-text"></span>`;
     bubbleText = bubble.querySelector(".b-text");
     setMood("idle");
+    idleLoop();
+  }
+
+  /* lúc rảnh: đảo mắt, đi lại trong vùng trống, vài động tác ngẫu nhiên. Lúc nói: về chỗ gốc cạnh bong bóng. */
+  const ACTS = ["act-hop", "act-ears", "act-wave", "act-tilt", "act-spin", "act-bounce", "act-peek"];
+  let idleTimer, actTimer, walkTimer, pos = { x: 0, y: 0 };
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  function look(x, y = 0) { root.style.setProperty("--look", x + "px"); root.style.setProperty("--look-y", y + "px"); }
+  function moveTo(x, y) {
+    const dist = Math.hypot(x - pos.x, y - pos.y);
+    if (dist < 4) return;
+    const stage = root.offsetParent;
+    const speed = (stage ? stage.clientWidth : 500) * 0.25;   // ~25% chiều rộng khung mỗi giây
+    const t = Math.max(0.6, Math.min(3.5, dist / speed));
+    if (Math.abs(x - pos.x) > 4) root.classList.toggle("face-left", x < pos.x);
+    look(x < pos.x ? -6 : 6);
+    root.style.setProperty("--wt", t.toFixed(2) + "s");
+    root.style.setProperty("--wx", Math.round(x) + "px");
+    root.style.setProperty("--wy", Math.round(y) + "px");
+    pos = { x, y };
+    root.classList.add("walking");
+    clearTimeout(walkTimer);
+    walkTimer = setTimeout(() => root.classList.remove("walking"), t * 1000);
+  }
+  function goHome() { moveTo(0, 0); }
+  /* vùng cấm: nội dung game + (chế độ vùng an toàn) cột comment TikTok bên trái phía dưới. Toạ độ trong khung. */
+  function blocked() {
+    const stage = root.offsetParent, sr = stage.getBoundingClientRect(), W = stage.clientWidth, H = stage.clientHeight;
+    const rects = [...stage.querySelectorAll("#hud, #arena, #main > *, #lane")]
+      .map((e) => e.getBoundingClientRect()).filter((r) => r.width && r.height)
+      .map((r) => ({ l: r.left - sr.left, t: r.top - sr.top, r: r.right - sr.left, b: r.bottom - sr.top }));
+    if (document.body.classList.contains("safe")) {
+      const sb = parseFloat(getComputedStyle(stage).getPropertyValue("--sb")) || 62;
+      rects.push({ l: 0, t: H * sb / 100, r: W * 0.74, b: H * 0.9 });   // comment TikTok
+    }
+    return rects;
+  }
+  function free(x, y) {                            // x, y: góc trên trái của Hami trong khung
+    const w = root.offsetWidth, h = root.offsetHeight, pad = w * 0.12;
+    return blocked().every((r) => x + w - pad <= r.l || x + pad >= r.r || y + h - pad <= r.t || y + pad >= r.b);
+  }
+  function wander() {
+    // offsetLeft/Top không tính transform = chỗ đứng gốc. Chừa 12% trên (tên host TikTok) và 10% dưới (ô nhập).
+    const stage = root.offsetParent;
+    if (!stage) return;
+    const W = stage.clientWidth, H = stage.clientHeight, w = root.offsetWidth, h = root.offsetHeight;
+    for (let i = 0; i < 30; i++) {
+      const x = rnd(0, Math.max(0, W - w)), y = rnd(H * 0.12, Math.max(H * 0.12, H * 0.9 - h));
+      if (free(x, y)) { moveTo(x - root.offsetLeft, y - root.offsetTop); return; }
+    }
+    goHome();                                      // hết chỗ trống: về chỗ gốc
+  }
+  function act(c) {
+    if (!root) return;
+    ACTS.forEach((a) => root.classList.remove(a));
+    void root.offsetWidth;                         // để animation chạy lại nếu trùng động tác cũ
+    root.classList.add(c);
+    clearTimeout(actTimer);
+    actTimer = setTimeout(() => root.classList.remove(c), 1700);
+  }
+  function idleLoop() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => { idleLoop(); try { idleStep(); } catch (e) { /* lỗi 1 bước không được làm dừng vòng */ } },
+      rnd(1800, 3600));
+  }
+  function idleStep() {
+    if (!root.offsetParent) return;                // đang ẩn (bot tắt / overlay chưa vẽ xong)
+    const busy = root.classList.contains("talking") || bubble.classList.contains("show");
+    const m = root.dataset.mood;
+    if (m !== "sleep") look(Math.round(rnd(-5, 5)), Math.round(rnd(-2, 3)));   // mắt luôn đảo
+    if (busy) { goHome(); return; }
+    if (!free(root.offsetLeft + pos.x, root.offsetTop + pos.y)) { wander(); return; }   // bị nội dung mới che: tránh đi
+    if (m !== "idle" && m !== "talk") return;      // đang vui / buồn / ngủ…: đứng yên cho biểu cảm hiện rõ
+    const r = Math.random();
+    if (r < 0.4) wander();
+    else if (r < 0.9) act(ACTS[Math.floor(Math.random() * ACTS.length)]);
   }
 
   /* hàng chờ: câu mới không cắt ngang câu đang nói (trừ khi câu cũ đã hiện đủ 2,5 giây và hàng đã dài) */
@@ -98,6 +175,7 @@ const Hami = (() => {
   function speak(text, mood) {
     clearTimeout(moodTimer); clearInterval(typeTimer); clearTimeout(hideTimer);
     setMood(mood);
+    goHome();                                       // về cạnh bong bóng thoại
     root.classList.add("talking");
     bubble.classList.add("show");
     document.body.classList.add("bot-talking");
@@ -131,5 +209,9 @@ const Hami = (() => {
     if (queue.length) { clearTimeout(nextTimer); nextTimer = setTimeout(pump, ms); }
   }
 
-  return { mount, say, base, speaking, extend };
+  /* còn câu chờ nói? (overlay dùng để biết Hami đã nói xong chưa trước khi chạy đồng hồ) */
+  const pending = () => queue.length;
+  const idle = () => !queue.length && Date.now() >= busyUntil;
+
+  return { mount, say, base, speaking, extend, pending, idle, act };
 })();

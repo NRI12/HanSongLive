@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lộ trình học · HanSong LIVE</title>
+<link rel="stylesheet" href="/static/plan.css?v=1">
+</head>
+<body>
+<header class="top">
+  <h1>📅 Lộ trình học</h1>
+  <a href="/admin" class="lnk">⚙️ Admin</a>
+</header>
+
+<form id="login" class="card hidden">
+  <h2>Đăng nhập</h2>
+  <input type="password" id="pw" placeholder="Mật khẩu admin" autocomplete="current-password">
+  <button>Đăng nhập</button>
+  <p id="loginErr" class="err"></p>
+</form>
+
+<main id="app" class="hidden">
+  <section class="card run" id="run"></section>
+
+  <section class="card">
+    <h2>✨ Soạn buổi mới</h2>
+    <p class="muted">Mỗi buổi khoảng 60 câu: 3 điểm ngữ pháp mới theo giáo trình (từ sơ cấp 2) + 2 điểm ôn, đan xen với từ vựng trong kho HanSong.
+      Mỗi ngày server tự soạn sẵn 1 buổi; bạn có thể soạn thêm hoặc tự chọn điểm ngữ pháp.</p>
+    <div id="nextPts" class="chips"></div>
+    <details class="pick">
+      <summary>Tự chọn điểm ngữ pháp (tối đa 6)</summary>
+      <div id="syllabus"></div>
+    </details>
+    <button id="create" class="primary">✨ Soạn buổi mới</button>
+    <p id="job" class="muted"></p>
+  </section>
+
+  <section class="card">
+    <h2>📚 Các buổi đã soạn</h2>
+    <div id="plans"></div>
+  </section>
+
+  <section class="card hidden" id="detail"></section>
+</main>
+
+<div id="toast" class="toast"></div>
+<script src="/static/plan.js?v=1"></script>
+</body>
+</html>

@@ -116,6 +116,175 @@ def test_gifts_do_nothing_in_game_and_likes_double():
     assert g.players["an"]["score"] == 50
 
 
+def test_interaction_pulses_combo_and_ticker_badges():
+    """Thả tim / vào phòng / chia sẻ / follow / nhiều người cùng ra đòn đều có hiệu ứng trên overlay, không đổi luật chơi."""
+    g, clock = make_game()
+    s0 = g.state()
+    assert s0["pulse"] == []
+    g.handle({"type": "like", "user": {"id": "v", "name": "Vy", "avatar": "https://p16.tiktokcdn.com/v.webp"}, "count": 15})
+    g.handle({"type": "join", "user": {"id": "j1", "name": "Ja"}})
+    g.handle({"type": "join", "user": {"id": "j2", "name": "Jb"}})     # quá sát lượt trước: không thêm hiệu ứng
+    clock.t += 2
+    g.handle({"type": "join", "user": {"id": "j3", "name": "Jc"}})
+    g.handle({"type": "share", "user": {"id": "s", "name": "Sa"}})
+    g.handle({"type": "follow", "user": {"id": "f", "name": "Fo"}})
+    p = g.state()["pulse"]
+    assert [(x["kind"], x["name"]) for x in p] == [("like", "Vy"), ("join", "Ja"), ("join", "Jc"), ("share", "Sa"), ("follow", "Fo")]
+    assert p[0]["n"] == 15 and p[0]["avatar"].startswith("https://") and [x["seq"] for x in p] == [1, 2, 3, 4, 5]
+    assert "Ja" not in [q["name"] for q in g.players.values()]       # vào phòng không tạo người chơi
+    g.start()
+    clock.t += 6                     # câu combo là câu phụ: không chen câu Hami vừa đọc đề
+    for i in range(10):
+        g.handle(C(f"u{i}", "ABCD"[(g.q["answer"] + i) % 4]))
+    combos = [x["n"] for x in g.state()["pulse"] if x["kind"] == "combo"]
+    assert combos == [5, 10] and any("10" in l["text"] for l in g.bot_lines)
+    # chuỗi hiển thị là chuỗi TRƯỚC câu này (không lộ đúng/sai), MVP đội vương miện
+    g.players["u0"]["streak"] = 4
+    g.king_uid = "u1"
+    g.skip(); g.skip()
+    g.handle(C("u0", "ABCD"[(g.q["answer"] + 1) % 4]))
+    g.handle(C("u1", "A"))
+    ra = g.state()["recent_ans"]
+    assert ra[0]["streak"] == 4 and not ra[0]["new"] and ra[1]["crown"] and not ra[0]["crown"]
+
+
+def test_bot_lines_tagged_for_audio_order_and_reveal_hold():
+    """Overlay xếp thứ tự đọc theo qid/intro/soft; màn đáp án được giữ thêm có giới hạn khi Hami còn câu cần nói."""
+    g, clock = make_game(bot=1)
+    g.start()
+    spawn = [l for l in g.bot_lines if l["kind"] == "spawn"]
+    assert spawn and spawn[-1]["qid"] == g.qid and spawn[-1]["intro"] and not spawn[-1]["soft"]   # thuộc câu vừa ra
+    g.skip(); g.skip()                                    # sang câu 2: câu giới thiệu "q" của câu 2
+    intro = g.bot_lines[-1]
+    assert intro["kind"].startswith("q") and intro["intro"] and intro["qid"] == g.qid == 2
+    clock.t += 6
+    g.handle(C("an", "ABCD"[g.q["answer"]]))
+    for i in range(5):
+        g.handle(C(f"x{i}", "ABCD"[(g.q["answer"] + 1) % 4]))
+    clock.t += 30; g.tick()                               # hết giờ -> hiện đáp án
+    lines = [l for l in g.bot_lines if l["qid"] == 2 and not l["intro"]]
+    kinds = [l["kind"] for l in lines]
+    assert "cheer1" in kinds or "cheer1_crit" in kinds
+    assert all(not l["soft"] for l in lines if l["kind"].startswith("cheer"))     # câu khen gọi tên không bao giờ bị bỏ
+    assert not g.hold_reveal(1)                            # câu cũ: bỏ qua
+    start, cap = g.reveal_at, g.reveal_at + 5 + g.REVEAL_HOLD_MAX
+    clock.t = start + 4.5
+    assert g.hold_reveal(2) and g.phase_end == start + 6.0
+    clock.t = cap - 0.5
+    assert g.hold_reveal(2) and g.phase_end == cap        # không giữ quá giới hạn
+    clock.t = cap + 0.1
+    assert not g.hold_reveal(2)
+    g.tick()
+    assert g.phase == "question"
+
+
+def make_special(**cfg):
+    clock = Clock()
+    pick = lambda recent, cfg: live.build_question(WORDS[0], WORDS, cfg["mode"])
+    g = live.LiveGame(pick, clock=clock, persist=False, pairs_picker=lambda n, cfg: WORDS[:n])
+    g.configure({"mode": "ko2vi", "question_s": 20, "reveal_s": 5, "clear_s": 10, "turns": 1, "boss_every": 0,
+                 "vote": 1, "read_wait_s": 0, "flip_pairs": 4, "flip_s": 60, **cfg})
+    return g, clock
+
+
+def to_floor(g, clock, floor):
+    """Hạ quái liên tục tới khi quái ở ải `floor` xuất hiện."""
+    while g.monster is None or g.monster["floor"] < floor:
+        if g.phase == "idle":
+            g.start()
+        elif g.phase == "question":
+            g.monster["hp"] = 1
+            if g.monster.get("game") == "race":
+                g.race["dist"]["an"] = live.RACE_FINISH
+            answer(g, "an"); clock.t += 1; g.skip()
+        elif g.phase == "flip":
+            flip_all(g, clock)
+        else:
+            g.skip()
+
+
+def flip_all(g, clock):
+    pos = {}
+    for i, c in enumerate(g.flip["cards"]):
+        pos.setdefault(c["pair"], []).append(i)
+    for k, (i, j) in enumerate(pos.values()):
+        clock.t += 3
+        g.handle(C(f"u{k}", f"{i + 1} và {j + 1}"))
+
+
+def test_flip_floor_pairs_damage_and_clear():
+    g, clock = make_special()
+    to_floor(g, clock, 2)
+    assert g.phase == "flip" and g.monster["game"] == "flip" and g.monster["max_hp"] == 4 * live.FLIP_DMG
+    v = g.state()["flip"]
+    assert len(v["cards"]) == 8 and all(c["state"] == "down" and "text" not in c for c in v["cards"])   # thẻ úp không lộ chữ
+    cards = g.flip["cards"]
+    pos = {}
+    for i, c in enumerate(cards):
+        pos.setdefault(c["pair"], []).append(i)
+    wrong = next(j for j in range(1, 8) if cards[j]["pair"] != cards[0]["pair"])
+    g.handle(C("lan", f"1 {wrong + 1}"))                     # lật sai: 2 thẻ mở cho cả phòng xem rồi úp lại
+    v = g.state()["flip"]
+    assert v["cards"][0]["state"] == "up" and "text" in v["cards"][0] and g.monster["hp"] == g.monster["max_hp"]
+    g.handle(C("lan", "3 4"))                                # chưa hết thời gian chờ 2,5 giây: bỏ qua
+    assert len(g.flip["log"]) == 1
+    clock.t += live.FLIP_SHOW + .1; g.tick()
+    assert g.state()["flip"]["cards"][0]["state"] == "down"
+    for k, (i, j) in enumerate(pos.values()):
+        clock.t += 3
+        g.handle(C(f"u{k}", f"{i + 1} và {j + 1}"))
+    assert g.phase == "clear" and g.outcome["kind"] == "clear" and g.monster["hp"] == 0
+    assert g.outcome["next_floor"] == 3 and g.vote is None    # trước ải đua xe không bình chọn cửa
+    assert g.players["u0"]["score"] == live.FLIP_DMG
+
+
+def test_flip_timeout_hits_room_and_reshuffles():
+    g, clock = make_special()
+    to_floor(g, clock, 2)
+    hearts, board = g.hearts, g.flip["board"]
+    clock.t += 61; g.tick()
+    assert g.phase == "flip" and g.hearts == hearts - 1 and g.flip["board"] != board
+    assert any(f["kind"] == "timeout" for f in g.feed)
+
+
+def test_race_floor_cars_and_monster_car():
+    g, clock = make_special()
+    to_floor(g, clock, 3)
+    assert g.monster["game"] == "race" and g.monster["max_hp"] == live.RACE_FINISH and g.phase == "question"
+    answer(g, "an"); g.handle(C("binh", "ABCD"[(g.q["answer"] + 1) % 4]))
+    clock.t += 1; g.skip()
+    r = g.state()["question"]["result"]["race"]
+    car = r["after"]["cars"][0]
+    assert car["name"] == "an" and car["dist"] == g.players["an"]["score"] - g.players["an"]["score"] + car["dist"]
+    assert r["after"]["mon"] == live.RACE_MON_STEP and g.monster["hp"] == live.RACE_FINISH - car["dist"]
+    assert g.hearts == 5                                     # đua xe: không phản đòn kiểu < 50% đúng
+    # xe quái về đích trước: mất tim, đua lại từ đầu
+    hearts = g.hearts
+    for _ in range(10):
+        g.skip()
+        if g.phase != "question":
+            break
+        g.handle(C("chi", "ABCD"[(g.q["answer"] + 1) % 4])); g.skip()
+        if g.hearts < hearts:
+            break
+    assert g.hearts == hearts - 1 and g.race["mon"] == 0 and g.race["dist"] == {}
+
+
+def test_race_finish_kills_monster():
+    g, clock = make_special()
+    to_floor(g, clock, 3)
+    g.race["dist"]["an"] = live.RACE_FINISH - 5
+    g._player({"id": "an", "name": "an"})
+    answer(g, "an"); clock.t += 1; g.skip()
+    assert g.state()["question"]["result"]["killed"] and g.outcome["last_hit"]["name"] == "an"
+
+
+def test_special_floors_can_be_turned_off():
+    g, clock = make_special(special_floors=0)
+    to_floor(g, clock, 3)
+    assert g.monster["game"] is None and g.phase == "question"
+
+
 def test_vi2ko_mode():
     g, _ = make_game("vi2ko")
     g.start()
@@ -290,7 +459,8 @@ def test_kill_clear_vote_and_next_monster():
     assert g.monster["hp"] == 30 and g.monster["traits"] == []       # ải 1: quái yếu, chưa có đặc tính
     av = "https://p16.tiktokcdn.com/a.webp"
     g.handle({"type": "comment", "user": {"id": "an", "name": "An", "avatar": av}, "text": "ABCD"[g.q["answer"]]})
-    assert g.state()["recent_ans"][0] == {"name": "An", "avatar": av, "letter": "ABCD"[g.q["answer"]], "level": 1, "seq": 1}
+    assert g.state()["recent_ans"][0] == {"name": "An", "avatar": av, "letter": "ABCD"[g.q["answer"]], "level": 1, "seq": 1,
+                                           "streak": 0, "crown": False, "new": True}
     clock.t += 1
     answer(g, "binh")
     clock.t += 19.1; g.tick()
@@ -397,6 +567,40 @@ def test_new_question_kinds():
     assert kinds == {"ko2vi", "vi2ko", "cloze"}                 # hanviet thiếu 4 âm khác nhau, trans chưa có
 
 
+GRAM = {"target": "여기에서", "answer": "에서", "distractors": ["에", "을", "이"], "point": "에서: nơi diễn ra hành động"}
+GFIX = {"wrong": ["여기에 기다리세요.", "여기에서 기다려세요.", "여기를 기다리세요."], "point": "에서 + đuôi -(으)세요"}
+
+
+def test_grammar_kinds_build_and_clean():
+    g = live.build_gram(AIW[0], GRAM)
+    assert g["prompt"] == "여기＿＿＿ 기다리세요." and g["options"][g["answer"]] == "에서"
+    assert g["hint"] == "Hãy đợi ở đây." and g["audio_q"] is None and g["note"].startswith("에서")
+    f = live.build_gfix(AIW[0], GFIX)
+    assert f["prompt"] == "Hãy đợi ở đây." and f["options"][f["answer"]] == "여기에서 기다리세요." and f["answer_lang"] == "ko"
+    # bộ lọc đầu ra AI
+    assert ai.clean_gram(AIW[0], GRAM)["distractors"] == ["에", "을", "이"]
+    assert ai.clean_gram(AIW[0], dict(GRAM, target="거기에서")) is None            # target không có trong câu
+    assert ai.clean_gram(AIW[0], dict(GRAM, answer="여기")) is None                # answer không nằm cuối target
+    assert ai.clean_gram(AIW[0], dict(GRAM, distractors=["에서", "에", "을"])) is None   # trùng đáp án -> thiếu nhiễu
+    assert ai.clean_gfix(AIW[0], GFIX)["wrong"] == GFIX["wrong"]
+    assert ai.clean_gfix(AIW[0], {"wrong": ["여기에서 기다리세요.", "a", "b"]}) is None     # trùng câu đúng, không có chữ Hàn
+    # chế độ "chỉ ngữ pháp" và đan xen nhóm câu: câu sau khác nhóm câu trước
+    items = {"cloze": {10: {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요"]}},
+             "trans": {10: {"wrong": ["a", "b", "c"]}}, "gram": {10: GRAM}, "gfix": {10: GFIX}}
+    assert {live.make_question("grammar", AIW, set(), items)["mode"] for _ in range(30)} == {"gram", "gfix"}
+    for last in ("ko2vi", "cloze", "gram", "gfix", "trans"):
+        for _ in range(15):
+            m = live.make_question("all", AIW, set(), items, last=last)["mode"]
+            assert live.FAMILY[m] != live.FAMILY[last]
+    # engine: lúc hiện đáp án có giải thích ngữ pháp
+    gm = live.LiveGame(lambda recent, cfg: live.build_gram(AIW[0], GRAM), clock=Clock(), persist=False)
+    gm.configure({"read_wait_s": 0, "special_floors": 0})
+    gm.start()
+    assert gm.state()["question"]["note"] == ""
+    gm.handle(C("an", "에서")); gm.skip()
+    assert gm.answers["an"]["correct"] and gm.state()["question"]["note"].startswith("에서")
+
+
 def test_cloze_round_hides_romanization():
     items = {"cloze": {10: {"answer": "기다리세요", "distractors": ["먹으세요", "자세요", "가세요"]}}, "trans": {}}
     g = live.LiveGame(lambda recent, cfg: live.make_question("cloze", AIW, recent, items), clock=Clock(), persist=False)
@@ -422,11 +626,15 @@ def test_api_ai_flow(client, monkeypatch):
         assert key == "sk-secret-123" and model == "gpt-x"
         import json as _j
         ws = _j.loads(user.split("Dữ liệu:\n", 1)[1])
-        return {"items": [{"id": w["id"], "cloze": {"answer": w["example_ko"].split()[0],
-                                                   "distractors": ["가요", "봐요", "와요"]},
-                           "trans_wrong": ["Sai một.", "Sai hai.", "Sai ba."]} for w in ws]}
+        first = lambda w: w["example_ko"].split()[0]
+        return {"items": [{"id": w["id"], "cloze": {"answer": first(w), "distractors": ["가요", "봐요", "와요"]},
+                           "trans_wrong": ["Sai một.", "Sai hai.", "Sai ba."],
+                           "gram": {"target": first(w), "answer": first(w)[-1], "distractors": ["을", "에", "도"],
+                                    "point": "Tiểu từ"},
+                           "gfix": {"wrong": [w["example_ko"] + " 정말", w["example_ko"] + " 너무", w["example_ko"] + " 진짜"],
+                                    "point": "Đuôi câu"}} for w in ws]}
     monkeypatch.setattr(ai, "_chat", chat)
-    monkeypatch.setattr(ai.generate_items, "__defaults__", (chat, None))
+    monkeypatch.setattr(ai.generate_items, "__defaults__", (chat, None, "vocab"))
     c.post("/api/ai/clear")
     c.post("/api/ai/generate", json={"n": 5}).raise_for_status()
     for _ in range(200):                                       # job chạy nền: chờ tối đa 10 giây
@@ -434,7 +642,7 @@ def test_api_ai_flow(client, monkeypatch):
             break
         import time as _t; _t.sleep(0.05)
     assert main.AI_JOB["detail"].startswith("Xong"), main.AI_JOB["detail"]
-    assert c.get("/api/admin").json()["ai"]["counts"] == {"cloze": 5, "trans": 5}
+    assert c.get("/api/admin").json()["ai"]["counts"] == {"cloze": 5, "trans": 5, "gram": 5, "gfix": 5}
     q = main.picker(set(), dict(live.DEFAULT_CONFIG, mode="trans"))
     assert q["mode"] == "trans" and "Sai một." in q["options"]
     assert c.post("/api/ai/generate", json={"n": 5}).status_code == 400            # mọi từ đã có
@@ -565,10 +773,13 @@ def test_auto_check_generates_and_respects_credit(client, monkeypatch):
     c.post("/api/ai/clear")
     calls = []
 
-    def gen(words, cfg, key, chat=None, progress=None):
-        calls.append([w["id"] for w in words])
-        return [(w["id"], k, {"answer": "x", "distractors": ["a", "b", "c"]} if k == "cloze" else {"wrong": ["a", "b", "c"]})
-                for w in words if w["id"] != 1 for k in ("cloze", "trans")]   # từ id 1: AI "làm hỏng"
+    def gen(words, cfg, key, chat=None, progress=None, part="vocab"):
+        if part == "vocab":
+            calls.append([w["id"] for w in words])
+        data = {"cloze": {"answer": "x", "distractors": ["a", "b", "c"]}, "trans": {"wrong": ["a", "b", "c"]},
+                "gram": {"target": "x", "answer": "x", "distractors": ["a", "b", "c"], "point": ""},
+                "gfix": {"wrong": ["a", "b", "c"], "point": ""}}
+        return [(w["id"], k, data[k]) for w in words if w["id"] != 1 for k in main.PARTS[part]]   # từ id 1: AI "làm hỏng"
     monkeypatch.setattr(ai, "generate_items", gen)
     wait = lambda: [__import__("time").sleep(0.02) for _ in range(250) if main.AI_JOB["running"]]
     main.GAME.set_ai_down("")
@@ -616,8 +827,9 @@ def test_bot_voice_endpoint_cache_and_credit(client, monkeypatch):
         seq = g.bot_seq
     r = c.get(f"/audio/bot/{seq}.mp3")
     assert r.status_code == 200 and r.content == b"ID3voice"
-    assert c.get(f"/audio/bot/{seq}.mp3").status_code == 200 and calls.count(calls[-1]) == 1   # lần 2 lấy cache
-    assert calls[-1] == "Chào Lan! Comment A/B/C/D chơi cùng mình nha"                          # đọc không kèm emoji
+    # luồng warm_voices có thể gọi tts song song (câu cố định): chỉ đếm câu của test này
+    want = "Chào Lan! Comment A/B/C/D chơi cùng mình nha"                                       # đọc không kèm emoji
+    assert c.get(f"/audio/bot/{seq}.mp3").status_code == 200 and calls.count(want) == 1         # lần 2 lấy cache
     assert c.get("/audio/bot/999999.mp3").status_code == 404        # chỉ đọc câu engine đã tạo
     assert c.get("/audio/1/mix.mp3").status_code != 422            # route từ vựng không bị route bot che
 
@@ -743,3 +955,104 @@ def test_bot_announces_new_leader():
     assert said_after(g._announce_top) == []                     # không đổi: im cho tới đủ TOP_EVERY câu
     g.rounds += g.TOP_EVERY
     assert any("Minh" in t for t in said_after(g._announce_top))  # nhắc định kỳ người đang dẫn đầu
+
+
+# ---------------------------------------------------------------- lộ trình học theo ngày
+from app import plan as planmod
+
+
+def plan_chat(calls):
+    """AI giả: mỗi điểm ngữ pháp trả về câu gram + gfix hợp lệ (kèm 1 câu hỏng để kiểm tra bộ lọc)."""
+    def chat(provider, model, key, system, user):
+        calls.append(user)
+        if "Kiểm tra" in user:
+            return {}                                                   # kiểm duyệt trả rỗng: giữ bản gốc
+        items = []
+        for k in range(10):
+            ko = f"비가 오{k}면 집에 있어요."
+            items.append({"type": "gram", "ko": ko, "vi": f"Nếu trời mưa {k} thì tôi ở nhà.", "target": f"오{k}면",
+                          "answer": "면", "distractors": ["서", "니까", "고"], "point": "-(으)면: điều kiện"})
+            items.append({"type": "gfix", "ko": ko, "vi": f"Nếu trời mưa {k} thì tôi ở nhà.",
+                          "wrong": [f"비가 오{k}으면 집에 있어요.", f"비가 오{k}서 집에 있어요.", f"비가 오{k}니까 집에 있어요."],
+                          "point": "-(으)면 sau nguyên âm"})
+        items.append({"type": "gram", "ko": "비가 와요.", "vi": "Trời mưa.", "target": "없음", "answer": "x"})   # hỏng
+        return {"items": items}
+    return chat
+
+
+W40 = [dict(WORDS[i % 5], id=100 + i, korean=f"단어{i}", vietnamese=f"từ số {i}") for i in range(40)]
+
+
+def test_plan_create_interleave_and_run():
+    planmod.stop()
+    with db.tx() as c:
+        c.execute("DELETE FROM live_plans")
+    calls = []
+    cfg = dict(ai.DEFAULT_AI, provider="openai", verify=True)
+    p = planmod.create(W40, {"cloze": {}, "trans": {}, "gram": {}, "gfix": {}}, cfg, "sk", chat=plan_chat(calls))
+    assert [x["no"] for x in p["points"]] == [1, 2, 3] and all(x["new"] for x in p["points"])   # buổi đầu: chưa có điểm ôn
+    assert planmod.POINTS[0]["stage"] == "Sơ cấp 2"                     # bỏ sơ cấp 1
+    qs = p["questions"]
+    g = [q for q in qs if q["mode"] in ("gram", "gfix")]
+    assert len(g) == 3 * planmod.PER_NEW and len(qs) == planmod.PLAN_SIZE
+    assert all(q["word_id"] < 0 and q["audio_url"].startswith(f"/audio/plan/{p['id']}/") and q["point_form"] for q in g)
+    assert all(q["word_id"] > 0 for q in qs if q["mode"] not in ("gram", "gfix"))       # từ vựng lấy từ kho HanSong
+    # đan xen: không có 3 câu cùng nhóm liền nhau
+    fam = ["g" if q["mode"] in ("gram", "gfix") else "v" for q in qs]
+    assert not any(fam[i] == fam[i + 1] == fam[i + 2] for i in range(len(fam) - 2))
+    # buổi 2: 3 điểm kế tiếp + 2 điểm ôn
+    p2 = planmod.create(WORDS, {"cloze": {}, "trans": {}, "gram": {}, "gfix": {}}, cfg, "sk", chat=plan_chat(calls))
+    assert [x["no"] for x in p2["points"] if x["new"]] == [4, 5, 6] and len([x for x in p2["points"] if not x["new"]]) == 2
+    assert {x["no"] for x in p2["points"] if not x["new"]} <= {1, 2, 3}
+    # chạy buổi 1 trên engine: game ra đúng câu theo thứ tự, hết thì quay về câu thường
+    assert planmod.run(p["id"])
+    game = live.LiveGame(lambda recent, cfg: planmod.next_question()[0] or live.build_question(WORDS[0], WORDS, "ko2vi"),
+                         clock=Clock(), persist=False)
+    game.configure({"read_wait_s": 0, "special_floors": 0, "turns": 20})
+    game.start()
+    assert game.q["prompt"] == qs[0]["prompt"] and planmod.active()["pos"] == 1
+    game.skip(); game.skip()
+    assert game.q["prompt"] == qs[1]["prompt"]
+    planmod.run(p["id"], len(qs) - 1)
+    game.skip(); game.skip()
+    assert game.q["prompt"] == qs[-1]["prompt"]
+    q, finished = planmod.next_question()
+    assert q is None and finished and planmod.active() is None
+
+
+def test_plan_api(client, monkeypatch):
+    c = client
+    c.put("/api/config", json={"hansong_url": "http://hansong.test", "hansong_password": "pw",
+                               "openai_key": "sk-plan", "ai": {"provider": "openai", "verify": False}}).raise_for_status()
+    with db.tx() as cx:
+        cx.execute("DELETE FROM live_plans")
+    planmod.stop()
+    monkeypatch.setattr(ai, "_chat", plan_chat([]))
+    synth = []
+    monkeypatch.setattr(main, "synth_ko", lambda text: synth.append(text) or None)
+    s = c.get("/api/plans").json()
+    assert s["plans"] == [] and s["next"] == [1, 2, 3] and s["has_key"] and len(s["syllabus"]) == len(planmod.POINTS)
+    c.post("/api/plans", json={"points": [10, 12]}).raise_for_status()      # tự chọn điểm ngữ pháp
+    for _ in range(200):
+        if not main.PLAN_JOB["running"]:
+            break
+        __import__("time").sleep(0.05)
+    assert main.PLAN_JOB["detail"].startswith("Xong"), main.PLAN_JOB["detail"]
+    s = c.get("/api/plans").json()
+    pid = s["plans"][0]["id"]
+    assert [p["no"] for p in s["plans"][0]["points"]] == [10, 12] and s["plans"][0]["grammar"] == 2 * planmod.PER_NEW
+    d = c.get(f"/api/plans/{pid}").json()
+    n = len(d["questions"])
+    assert c.post(f"/api/plans/{pid}/run", json={"pos": 2}).json()["active"] == {"id": pid, "pos": 2}
+    assert c.delete(f"/api/plans/{pid}/q/0").json()["total"] == n - 1
+    assert c.get("/api/plans").json()["active"]["pos"] == 1              # bỏ câu phía trước: vị trí đang chạy lùi theo
+    q = main.picker(set(), dict(live.DEFAULT_CONFIG))
+    assert q["prompt"] == c.get(f"/api/plans/{pid}").json()["questions"][1]["prompt"]
+    assert main.picker(set(), dict(live.DEFAULT_CONFIG, forced=True))["word_id"] > 0   # quái ép kiểu câu: không lấy câu lộ trình
+    gq = next(q for q in d["questions"] if q.get("audio_url"))
+    assert c.get(gq["audio_url"]).status_code == 404 and synth           # chưa có giọng: 404, có gọi tạo giọng
+    assert c.get(f"/audio/plan/{pid}/999.mp3").status_code == 404
+    c.post("/api/plans/stop").raise_for_status()
+    assert c.get("/api/plans").json()["active"] is None
+    c.delete(f"/api/plans/{pid}").raise_for_status()
+    assert c.get("/api/plans").json()["plans"] == [] and c.get("/plan").status_code == 200

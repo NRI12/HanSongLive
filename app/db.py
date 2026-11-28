@@ -63,6 +63,13 @@ CREATE TABLE IF NOT EXISTS live_viewers (
   gifts INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS live_viewers_last ON live_viewers(last_seen);
+CREATE TABLE IF NOT EXISTS live_plans (       -- lộ trình học theo ngày (app/plan.py), data = JSON cả buổi
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  day TEXT NOT NULL,
+  title TEXT NOT NULL,
+  data TEXT NOT NULL,
+  created_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 

@@ -5,44 +5,51 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Săn Quái Chữ · HanSong LIVE</title>
 <link rel="stylesheet" href="/static/game/font/font.css">
-<link rel="stylesheet" href="/static/overlay.css">
-<link rel="stylesheet" href="/static/bot.css?v=3">
+<link rel="stylesheet" href="/static/overlay.css?v=12">
+<link rel="stylesheet" href="/static/bot.css?v=4">
 </head>
 <body>
 <div id="stage" class="stage">
-  <!-- HUD: ải + vùng, tim chung, mốc tim/chia sẻ, kỷ lục -->
-  <header class="hud" id="hud"></header>
+  <!-- KHUNG CHÍNH: mọi nội dung game nằm trong khung này, mỗi phần một ô riêng -->
+  <div class="frame" id="frame">
+    <header class="hud" id="hud"></header>          <!-- ải + kiểu ải + tim chung -->
+    <div class="evt" id="evt"><i class="bar"></i><div class="txt"></div></div>   <!-- dòng sự kiện -->
 
-  <!-- sàn đấu: phần tử giữ nguyên giữa các lần vẽ để hoạt cảnh quái không chạy lại -->
-  <section class="arena" id="arena">
-    <div class="bg" id="arenaBg"></div>
-    <div class="hp" id="hp"></div>
-    <div class="panel" id="panel"></div>
-    <div class="mon" id="mon"><div class="mon-inner" id="monInner"></div></div>
-    <div class="banner" id="banner"></div>
-    <div class="fx" id="fx"></div>
-  </section>
+    <!-- khu ải: bố cục đổi theo kiểu ải (l-quiz | l-duel | l-boss | l-race | l-flip | l-end) -->
+    <section class="board l-quiz" id="board">
+      <div class="arena" id="arena">
+        <div class="bg" id="arenaBg"></div>
+        <div class="hp" id="hp"></div>
+        <div class="mon" id="mon"><div class="mon-inner" id="monInner"></div></div>
+        <div class="banner" id="banner"></div>
+        <div class="fx" id="fx"></div>
+      </div>
+      <div class="qcard" id="qcard"><div class="panel" id="panel"></div></div>
+      <div class="track hidden" id="track"></div>
+    </section>
 
-  <section id="main" class="main"></section>
+    <section id="main" class="main"></section>        <!-- đáp án / bảng thẻ / MVP + cửa -->
 
-  <!-- làn bot: dải "vừa ra đòn" / mẹo chơi; bong bóng thoại của Hami hiện đè lên làn này -->
-  <div class="lane" id="lane"><div class="ticker" id="ticker"></div><div class="tips" id="tips"></div></div>
+    <!-- dòng cuối: dải "vừa ra đòn" / mẹo; bong bóng thoại của Hami hiện đè lên dòng này -->
+    <div class="lane" id="lane"><div class="ticker" id="ticker"></div><div class="tips" id="tips"></div></div>
+
+    <div id="splash" class="splash hidden"></div>   <!-- modal trong khung: quái xuất hiện -->
+  </div>
 
   <div class="reserve"></div>
 
+  <div id="fly" class="fly"></div>
   <div id="flash" class="flash"></div>
-  <div id="splash" class="splash hidden"></div>
   <div id="confetti" class="confetti"></div>
   <div id="hami" class="hami hidden"></div>
   <div id="hamiBubble" class="hami-bubble"></div>
-  <div id="alert" class="alert hidden"></div>
   <div id="guide" class="guide hidden"></div>
 </div>
 
 <audio id="snd" preload="auto"></audio>
-<script src="/static/sfx.js?v=2"></script>
+<script src="/static/sfx.js?v=3"></script>
 <script src="/static/bot.js?v=3"></script>
 <script src="/static/monster.js"></script>
-<script src="/static/overlay.js?v=5"></script>
+<script src="/static/overlay.js?v=19"></script>
 </body>
 </html>

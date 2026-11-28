@@ -92,6 +92,8 @@
           <option value="all">Trộn mọi dạng (khuyên dùng)</option>
           <option value="mix">Hàn ↔ Việt</option><option value="ko2vi">Hàn → Việt</option><option value="vi2ko">Việt → Hàn</option>
           <option value="cloze">🧩 Điền chỗ trống (cần AI)</option><option value="trans">📝 Dịch câu (cần AI)</option>
+          <option value="grammar">📘 Chỉ ngữ pháp (cần AI)</option><option value="gram">📘 Điền ngữ pháp (cần AI)</option>
+          <option value="gfix">✅ Câu đúng ngữ pháp (cần AI)</option>
           <option value="hanviet">🈶 Âm Hán Việt</option></select></label>
         <label>Giây trả lời mỗi câu<input type="number" name="question_s" min="8" max="120"></label>
         <label>Tim chung của phòng<input type="number" name="hearts" min="1" max="20"></label>
@@ -108,6 +110,9 @@
           <label>Giây màn hạ quái / thua<input type="number" name="clear_s" min="4" max="40"></label>
           <label>Số câu để hạ 1 quái<input type="number" name="turns" min="1" max="20"></label>
           <label>Boss mỗi N ải (0 = tắt)<input type="number" name="boss_every" min="0" max="50"></label>
+          <label>Ải đặc biệt (ải 2 lật thẻ, ải 3 đua xe)<select name="special_floors"><option value="1">Bật</option><option value="0">Tắt</option></select></label>
+          <label>Ải lật thẻ: số cặp<input type="number" name="flip_pairs" min="4" max="8"></label>
+          <label>Ải lật thẻ: giây mỗi lượt bảng<input type="number" name="flip_s" min="30" max="300"></label>
           <label>Tim thả để câu sau x2 (0 = tắt)<input type="number" name="like_goal" min="0" max="100000"></label>
           <label>Lượt chia sẻ để hồi 1 tim (0 = tắt)<input type="number" name="share_goal" min="0" max="10000"></label>
           <label>Hami mời tim/follow mỗi N câu (0 = tắt)<input type="number" name="support_every" min="0" max="100"></label>

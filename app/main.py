@@ -6,6 +6,7 @@ Trang:
 """
 import asyncio
 import hashlib
+import json
 import hmac
 import os
 import random
@@ -13,14 +14,15 @@ import re
 import shutil
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import ai, bot, db, live, viewers
+from . import ai, bot, db, live, plan, viewers
 from .source import HanSongSource, SourceError
 from .tiktok import TikTokConnector
 
@@ -60,14 +62,43 @@ def source() -> HanSongSource:
 
 
 def picker(recent: set, cfg: dict):
+    if not cfg.get("forced"):              # đang chạy 1 buổi trong lộ trình: ra đúng câu kế tiếp của buổi đó
+        q, finished = plan.next_question()
+        if finished:
+            GAME._push("system", "🎉 Đã chạy hết buổi học trong lộ trình! Quay về câu hỏi thường", alert=True, tier=2)
+        if q:
+            if q.get("word_id", 0) > 0:
+                threading.Thread(target=source().prefetch, args=(q["word_id"],), daemon=True).start()
+            return q
     try:
         words = source().words(cfg["source"])
     except SourceError:
         return None
-    q = live.make_question(cfg["mode"], words, recent, live.load_items(words))
+    q = live.make_question(cfg["mode"], words, recent, live.load_items(words), last=cfg.get("last_mode"))
     if q:   # tải sẵn âm thanh câu này ở nền
         threading.Thread(target=source().prefetch, args=(q["word_id"],), daemon=True).start()
     return q
+
+
+def pairs_picker(n: int, cfg: dict) -> list[dict] | None:
+    """Ải lật thẻ: n từ ngẫu nhiên, chữ Hàn và nghĩa đều khác nhau, nghĩa đủ ngắn để vừa 1 thẻ."""
+    try:
+        words = source().words(cfg["source"])
+    except SourceError:
+        return None
+    pool = [w for w in words if w.get("korean") and w.get("vietnamese") and len(w["vietnamese"]) <= 24]
+    random.shuffle(pool)
+    out, ko, vi = [], set(), set()
+    for w in pool:
+        k, v = live.plain(w["korean"]), live.plain(w["vietnamese"])
+        if k in ko or v in vi:
+            continue
+        ko.add(k); vi.add(v); out.append(w)
+        if len(out) >= n:
+            break
+    for w in out:       # tải sẵn âm thanh: lật trúng cặp thì đọc từ đó
+        threading.Thread(target=source().prefetch, args=(w["id"],), daemon=True).start()
+    return out
 
 
 # ---------------------------------------------------------------- AI
@@ -90,20 +121,32 @@ AUTO_BATCH = 30            # mỗi lần tự tạo tối đa 30 từ
 AUTO_FAIL_S = 24 * 3600    # từ nào AI làm hỏng (bị loại khi kiểm tra) thì 1 ngày sau mới thử lại, tránh tốn tiền lặp
 
 
-def missing_words(words: list[dict], redo: bool = False) -> list[dict]:
-    """Từ có câu ví dụ nhưng chưa đủ nội dung AI (cloze + trans)."""
+PARTS = {"vocab": ("cloze", "trans"), "gram": ("gram", "gfix")}
+
+
+def missing_words(words: list[dict], redo: bool = False, part: str | None = None) -> list[dict]:
+    """Từ có câu ví dụ nhưng chưa đủ nội dung AI. part=None: thiếu bất kỳ phần nào (từ vựng hoặc ngữ pháp)."""
     have = live.load_items(words)
+    kinds = PARTS[part] if part else PARTS["vocab"] + PARTS["gram"]
     return [w for w in words if w.get("example_ko") and w.get("example_vi")
-            and (redo or w["id"] not in have["cloze"] or w["id"] not in have["trans"])]
+            and (redo or any(w["id"] not in have[k] for k in kinds))]
 
 
-def run_ai_job(words: list[dict], cfg: dict, key: str, auto: bool = False):
+def run_ai_job(words: list[dict], cfg: dict, key: str, auto: bool = False, redo: bool = False):
+    rows: list = []
+
     def progress(n_words, n_items):
         AI_JOB["done"] += n_words
-        AI_JOB["made"] = n_items
+        AI_JOB["made"] = len(rows) + n_items
     try:
-        rows = ai.generate_items(words, cfg, key, progress=progress)
-        live.save_items(rows, words)
+        # từ vựng (điền từ, dịch câu) rồi ngữ pháp (điền ngữ pháp, câu đúng ngữ pháp): chỉ phần còn thiếu
+        needs = {part: missing_words(words, redo, part) for part in PARTS}
+        AI_JOB["total"] = sum(len(n) for n in needs.values()) or len(words)
+        for part, need in needs.items():
+            if need:
+                got = ai.generate_items(need, cfg, key, progress=progress, part=part)
+                live.save_items(got, words)
+                rows += got
         mark_ai(None)
         now = time.time()
         for w in missing_words(words):        # AI làm hỏng từ này: tạm bỏ qua khi tự tạo
@@ -117,7 +160,55 @@ def run_ai_job(words: list[dict], cfg: dict, key: str, auto: bool = False):
         AI_JOB["running"] = False
 
 
-GAME = live.LiveGame(picker)
+# ---------------------------------------------------------------- lộ trình học theo ngày (app/plan.py)
+PLAN_JOB = {"running": False, "detail": "", "failed_day": "", "failed_at": 0.0}
+PLAN_AUTO = {"next": time.time() + 90}
+PLAN_AUTO_EVERY_S = 600       # cứ 10 phút xem hôm nay đã có buổi học chưa
+
+
+def run_plan_job(new: list[int] | None = None):
+    try:
+        cfg = ai_conf()
+        key = ai_key(cfg["provider"])
+        words = source().words("all")
+        p = plan.create(words, live.load_items(words), cfg, key, new=new)
+        PLAN_JOB["detail"] = f"Xong: buổi #{p['id']} · {len(p['questions'])} câu · {p['title']}"
+        threading.Thread(target=warm_plan, args=(p["id"],), daemon=True).start()
+    except ai.AICreditError as e:
+        mark_ai(e)
+        PLAN_JOB.update(detail=f"Lỗi: {e}", failed_day=__import__("datetime").date.today().isoformat(), failed_at=time.time())
+    except Exception as e:
+        PLAN_JOB.update(detail=f"Lỗi: {e}", failed_day=__import__("datetime").date.today().isoformat(), failed_at=time.time())
+    finally:
+        PLAN_JOB["running"] = False
+
+
+def start_plan_job(new: list[int] | None = None) -> bool:
+    if PLAN_JOB["running"] or not ai_key(ai_conf()["provider"]):
+        return False
+    PLAN_JOB.update(running=True, detail="Đang soạn buổi học (khoảng 1 phút)…")
+    threading.Thread(target=run_plan_job, args=(new,), daemon=True).start()
+    return True
+
+
+def plan_auto():
+    """Mỗi ngày tự soạn sẵn 1 buổi (nếu hôm nay chưa có) để chủ kênh xem trước ở /plan. Lỗi thì 1 tiếng sau mới thử lại."""
+    now = time.time()
+    if now < PLAN_AUTO["next"]:
+        return
+    PLAN_AUTO["next"] = now + PLAN_AUTO_EVERY_S
+    today = __import__("datetime").date.today().isoformat()
+    if not ai_conf().get("auto") or PLAN_JOB["running"] or not plan.next_points(1):
+        return
+    if PLAN_JOB["failed_day"] == today and now - PLAN_JOB["failed_at"] < 3600:
+        return
+    if GAME.ai_down and now - BOT["down_at"] < AI_RETRY_S:
+        return
+    if not db.q1("SELECT id FROM live_plans WHERE day=?", (today,)):
+        start_plan_job()
+
+
+GAME = live.LiveGame(picker, pairs_picker=pairs_picker)
 CONNECTOR: TikTokConnector | None = None
 BOOT_ID = os.urandom(4).hex()   # mã phiên server, xem overlay_state
 STATUS = {"mode": "off", "state": "idle", "detail": "Chưa kết nối", "attempt": 0}
@@ -216,11 +307,14 @@ async def ticker():
         try:
             await asyncio.to_thread(GAME.tick)
             bot_pump()
+            voice_pump()
             if time.time() - last_flush >= 5:
                 last_flush = time.time()
                 await asyncio.to_thread(viewers.flush)
             if time.time() >= AUTO["next"]:
                 await asyncio.to_thread(auto_check)
+            if time.time() >= PLAN_AUTO["next"]:
+                await asyncio.to_thread(plan_auto)
         except Exception as e:  # không để vòng lặp chết
             GAME.message = f"Lỗi: {e}"
         await asyncio.sleep(0.25)
@@ -254,7 +348,8 @@ async def auth_mw(request: Request, call_next):
         admin_ok = hmac.compare_digest(request.cookies.get("hsl_token", ""), _sign("admin"))
         overlay_ok = p.startswith(("/api/overlay/", "/audio/")) and \
             hmac.compare_digest(request.query_params.get("k", ""), overlay_token())
-        if not (admin_ok or overlay_ok):
+        plan_ok = p.startswith(("/api/plans", "/audio/plan/"))   # trang /plan không cần mật khẩu (người dùng yêu cầu)
+        if not (admin_ok or overlay_ok or plan_ok):
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
     return await call_next(request)
 
@@ -391,7 +486,7 @@ def ai_generate(body: AIGenReq):
     if not todo:
         raise HTTPException(400, "Mọi từ trong nguồn đã có câu hỏi AI. Tích 'tạo lại' nếu muốn làm mới.")
     AI_JOB.update(running=True, total=len(todo), done=0, made=0, detail=f"Đang tạo cho {len(todo)} từ…")
-    threading.Thread(target=run_ai_job, args=(todo, cfg, key), daemon=True).start()
+    threading.Thread(target=run_ai_job, args=(todo, cfg, key, False, body.redo), daemon=True).start()
     return dict(AI_JOB)
 
 
@@ -502,6 +597,34 @@ def overlay_ready(qid: int):
     return {"ok": GAME.ready(qid)}
 
 
+@app.post("/api/overlay/hold")
+def overlay_hold(qid: int):
+    """Overlay còn đang diễn đòn đánh / đọc đáp án / Hami khen của câu `qid`: giữ màn đáp án thêm (có giới hạn)."""
+    return {"ok": GAME.hold_reveal(qid)}
+
+
+def _sig():
+    g = GAME
+    return (g.ver, g.phase, g.qid, g.bot_seq, g.feed_seq, g.pulse_seq, g.flip_seq, g.hearts, g.read_until, g.phase_end)
+
+
+@app.get("/api/overlay/stream")
+async def overlay_stream(request: Request):
+    """Kênh đẩy (Server-Sent Events): có comment / sự kiện / đổi màn là gửi trạng thái ngay (kiểm tra mỗi 30 ms),
+    không có gì đổi thì vẫn gửi 4 lần / giây cho đồng hồ đếm ngược. Overlay tự quay về hỏi định kỳ nếu kênh lỗi."""
+    async def gen():
+        last_sig, last_at = None, 0.0
+        while not await request.is_disconnected():
+            sig, now = _sig(), time.monotonic()
+            if sig != last_sig or now - last_at >= 0.25:
+                last_sig, last_at = sig, now
+                s = await asyncio.to_thread(overlay_state)
+                yield "data: " + json.dumps(s, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+            await asyncio.sleep(0.03)
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.get("/api/overlay/state")
 def overlay_state():
     boards = None
@@ -517,7 +640,7 @@ def overlay_state():
 TTS = {"down_at": 0.0, "detail": "", "warm": 0}
 TTS_LOCKS: dict[str, threading.Lock] = {}
 TTS_GUARD = threading.Lock()
-TTS_VERSION = "v1"         # đổi khi sửa BOT_VOICE_INSTR để không dùng lại file giọng cũ
+TTS_VERSION = "v2"         # đổi khi sửa BOT_VOICE_INSTR để không dùng lại file giọng cũ
 
 
 def voice_path(text: str) -> str:
@@ -551,6 +674,153 @@ def synth(text: str) -> str | None:
             TTS["detail"] = f"Lỗi giọng: {str(e)[:120]}"
             return None
     return p
+
+
+VOICE_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts")
+VOICE = {"seq": 0}
+
+
+def voice_pump():
+    """Câu thoại mới (có tên người xem…) chưa có trong cache: tạo giọng ngay ở luồng nền,
+    để lúc overlay xin file thì đã có sẵn, chữ trong bong bóng và tiếng khớp nhau."""
+    with GAME.lock:
+        new = [l for l in GAME.bot_lines if l["seq"] > VOICE["seq"]]
+        if GAME.bot_seq < VOICE["seq"]:          # engine đặt lại số thứ tự
+            VOICE["seq"] = 0
+    if not new:
+        return
+    VOICE["seq"] = new[-1]["seq"]
+    if not GAME.cfg["bot_voice"] or not ai_key("openai") or time.time() - TTS["down_at"] < AI_RETRY_S:
+        return
+    for l in new:
+        text = bot.speech_text(l["text"])
+        if text and not os.path.exists(voice_path(text)):
+            VOICE_POOL.submit(synth, text)
+
+
+def synth_ko(text: str) -> str | None:
+    """Câu tiếng Hàn tự đặt của lộ trình -> mp3 (giọng đọc chuẩn Seoul, cache)."""
+    voice = ai_conf().get("voice", "marin")
+    h = hashlib.sha1(f"ko1|{voice}|{text}".encode()).hexdigest()[:20]
+    p = os.path.join(db.DATA_DIR, "tts", f"ko_{h}.mp3")
+    if os.path.exists(p):
+        return p
+    key = ai_key("openai")
+    if not key or time.time() - TTS["down_at"] < AI_RETRY_S:
+        return None
+    with TTS_GUARD:
+        lock = TTS_LOCKS.setdefault(p, threading.Lock())
+    with lock:
+        if os.path.exists(p):
+            return p
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        try:
+            ai.tts(text, "ko", voice, p, key)
+        except ai.AICreditError as e:
+            TTS["down_at"] = time.time()
+            TTS["detail"] = f"⚠️ Giọng đọc tạm tắt: {e}"
+            return None
+        except ai.AIError:
+            return None
+    return p
+
+
+def _plan_text(pid: int, i: int) -> str:
+    p = plan.load(pid)
+    url = f"/audio/plan/{pid}/{i}.mp3"
+    q = next((q for q in (p or {}).get("questions", []) if q.get("audio_url") == url), None)
+    return (q or {}).get("word", {}).get("example_ko", "")
+
+
+def warm_plan(pid: int):
+    """Tạo sẵn giọng đọc các câu ngữ pháp của buổi (để lúc live hiện đáp án là đọc ngay)."""
+    p = plan.load(pid)
+    for q in (p or {}).get("questions", []):
+        t = q.get("word", {}).get("example_ko", "") if q.get("audio_url") else ""
+        if t and synth_ko(t) is None:
+            return
+
+
+@app.get("/audio/plan/{pid}/{i}.mp3")
+def plan_audio(pid: int, i: int):
+    """Chỉ đọc câu có trong lộ trình đã lưu (không nhận chữ tuỳ ý)."""
+    text = _plan_text(pid, i)
+    if not text:
+        raise HTTPException(404, "Không có câu này")
+    p = synth_ko(text)
+    if not p:
+        raise HTTPException(404, "Chưa có giọng đọc")
+    return FileResponse(p, media_type="audio/mpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+# ---------------------------------------------------------------- API lộ trình (/plan)
+class PlanReq(BaseModel):
+    points: list[int] | None = None     # tự chọn điểm ngữ pháp mới; trống = 3 điểm kế tiếp trong giáo trình
+
+
+class PlanRunReq(BaseModel):
+    pos: int = 0
+
+
+@app.get("/api/plans")
+def plans():
+    done = plan.taught()
+    return {"plans": plan.listing(), "active": plan.active(), "job": dict(PLAN_JOB),
+            "next": plan.next_points(),
+            "syllabus": [dict(p, taught=p["no"] in done) for p in plan.POINTS],
+            "has_key": bool(ai_key(ai_conf()["provider"]))}
+
+
+@app.get("/api/plans/{pid}")
+def plan_detail(pid: int):
+    p = plan.load(pid)
+    if not p:
+        raise HTTPException(404, "Không có buổi này")
+    return p
+
+
+@app.post("/api/plans")
+def plan_create(body: PlanReq):
+    if PLAN_JOB["running"]:
+        raise HTTPException(400, "Đang soạn một buổi khác, chờ chút")
+    if not ai_key(ai_conf()["provider"]):
+        raise HTTPException(400, "Chưa có API key AI (vào /admin để nhập)")
+    new = [n for n in (body.points or []) if n in plan.BY_NO][:6] or None
+    start_plan_job(new)
+    return dict(PLAN_JOB)
+
+
+@app.post("/api/plans/{pid}/run")
+def plan_run(pid: int, body: PlanRunReq):
+    if not plan.run(pid, body.pos):
+        raise HTTPException(404, "Không có buổi này hoặc buổi trống")
+    GAME._push("system", f"📅 Bắt đầu chạy buổi học #{pid}")
+    return {"ok": True, "active": plan.active()}
+
+
+@app.post("/api/plans/stop")
+def plan_stop():
+    plan.stop()
+    return {"ok": True}
+
+
+@app.delete("/api/plans/{pid}")
+def plan_delete(pid: int):
+    plan.delete(pid)
+    return {"ok": True}
+
+
+@app.delete("/api/plans/{pid}/q/{i}")
+def plan_delete_q(pid: int, i: int):
+    p = plan.load(pid)
+    if not p or not (0 <= i < len(p.get("questions", []))):
+        raise HTTPException(404, "Không có câu này")
+    p["questions"].pop(i)
+    plan.update(pid, {k: v for k, v in p.items() if k not in ("id", "created_at")})
+    a = plan.active()
+    if a and a["id"] == pid and a["pos"] > i:
+        db.set_conf("plan_active", {"id": pid, "pos": a["pos"] - 1})
+    return {"ok": True, "total": len(p["questions"])}
 
 
 def warm_voices():
@@ -606,6 +876,11 @@ def admin_page():
 @app.get("/overlay")
 def overlay_page():
     return _page("overlay.html")
+
+
+@app.get("/plan")
+def plan_page():
+    return _page("plan.html")
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

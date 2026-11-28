@@ -55,6 +55,7 @@ const SFX = (() => {
     };
     if (decoded[name]) return go(decoded[name]);
     if (!raw[name]) return;
+    until(c.currentTime + 0.8);      // đang giải mã lần đầu: coi như đang có tiếng để Hami không nói chồng
     const b = raw[name]; delete raw[name];
     c.decodeAudioData(b).then((buf) => { decoded[name] = buf; go(buf); }).catch(() => {});
   }

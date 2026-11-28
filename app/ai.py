@@ -76,6 +76,41 @@ Trả về JSON: {{"items":[{{"id":0,"cloze":{{"answer":"","distractors":["","",
 Dữ liệu:
 {data}"""
 
+GRAM_PROMPT = """Với mỗi câu ví dụ tiếng Hàn dưới đây (example_ko, nghĩa tiếng Việt example_vi), hãy soạn 2 câu hỏi NGỮ PHÁP. \
+Chọn điểm ngữ pháp có thật trong câu, không xét cấp độ.
+
+1. "gram" (điền ngữ pháp vào chỗ trống):
+   - "target": một cụm (eojeol) nguyên văn trong example_ko có chứa điểm ngữ pháp: tiểu từ (은/는, 이/가, 을/를, 에, 에서, \
+도, 와/과, 의, (으)로, 부터, 까지…) hoặc đuôi câu / đuôi nối / thì (-아요/어요, -았/었어요, -고 싶어요, -(으)세요, -지 마세요, \
+-아서/어서, -고, -지만, -(으)ㄹ 거예요, -(으)면…).
+   - "answer": đúng phần ngữ pháp đó, là chuỗi con nguyên văn nằm ở CUỐI target (vd target "도서관에서" → answer "에서"; \
+target "먹었어요" → answer "었어요"; target "가고 싶어요" → answer "고 싶어요").
+   - "distractors": đúng 3 phương án ngữ pháp khác cùng loại (vd "에", "을", "이"). Khi thay vào chỗ trống, câu phải \
+SAI NGỮ PHÁP (không chỉ khác nghĩa). Cấm phương án tạo ra câu vẫn đúng ngữ pháp (vd chỗ "만나＿＿" thì không được cho \
+"세요" vì "만나세요" vẫn đúng). Ưu tiên khoét tiểu từ vì rõ ràng nhất.
+   - "point": giải thích rất ngắn bằng tiếng Việt (tối đa 60 ký tự), vd "에서: nơi diễn ra hành động".
+
+2. "gfix" (chọn câu đúng ngữ pháp):
+   - "wrong": đúng 3 câu tiếng Hàn gần giống hệt example_ko, mỗi câu chỉ sai MỘT lỗi ngữ pháp mà người học hay mắc \
+(sai tiểu từ, chia đuôi sai như 하아요/하요, sai thì, sai bất quy tắc…), 3 câu sai ở 3 chỗ/kiểu lỗi khác nhau. \
+Cấm lỗi vô nghĩa như lặp âm tiết ("해요요") hay gõ sai chữ. Không câu nào lại đúng ngữ pháp.
+   - "point": nêu điểm ngữ pháp mà các câu sai đang kiểm tra, tối đa 60 ký tự tiếng Việt (vd "을/를 sau phụ âm/nguyên âm").
+
+Trả về JSON: {{"items":[{{"id":0,"gram":{{"target":"","answer":"","distractors":["","",""],"point":""}},\
+"gfix":{{"wrong":["","",""],"point":""}}}}]}}
+Dữ liệu:
+{data}"""
+
+GRAM_VERIFY = """Kiểm tra kỹ câu hỏi ngữ pháp tiếng Hàn sau như một biên tập viên đề thi.
+- gram.target phải là chuỗi con nguyên văn của example_ko và gram.answer nằm ở cuối target; sửa nếu sai.
+- Mỗi gram.distractors thay vào chỗ của answer phải làm câu SAI NGỮ PHÁP. Phương án nào vẫn tạo ra câu đúng ngữ pháp \
+(dù khác nghĩa, vd "만나세요" thay cho "만나요") thì thay bằng phương án khác.
+- Mỗi gfix.wrong phải thật sự SAI ngữ pháp (đúng 1 lỗi người học hay mắc) và khác example_ko; câu nào lỡ đúng, hoặc lỗi \
+vô nghĩa kiểu lặp âm tiết ("해요요"), thì viết lại.
+- point ngắn gọn, đúng.
+Giữ nguyên thứ tự, số lượng và id. Trả về JSON cùng schema.
+{data}"""
+
 VERIFY_PROMPT = """Kiểm tra kỹ dữ liệu câu hỏi trắc nghiệm tiếng Hàn sau như một biên tập viên đề thi.
 Với mỗi mục:
 - cloze.answer phải là chuỗi con nguyên văn của example_ko và chứa đúng từ cần hỏi; sửa nếu sai.
@@ -128,8 +163,9 @@ TTS_INSTR = {
 VOICES = ("marin", "coral", "nova", "shimmer", "sage", "cedar", "alloy", "ballad", "fable", "verse", "ash", "echo", "onyx")
 BOT_VOICE_INSTR = (
     "Voice: Hami, a super cute, cheerful little bunny mascot hosting a Vietnamese TikTok livestream that teaches Korean. "
-    "Bright, playful, slightly high-pitched young female voice, smiling while talking, warm and a bit sweet, "
-    "energetic like a friendly livestream MC. Speak Vietnamese with a clear northern accent at a lively pace. "
+    "Bright, playful, slightly high-pitched young female voice, cute but cheeky and a little bratty: "
+    "sassy, teasing, confident attitude, like a spoiled mascot roasting the audience for fun, never actually angry. "
+    "Energetic like a livestream MC. Speak Vietnamese with a clear northern accent at a lively pace. "
     "Pronounce any Korean words naturally in standard Seoul Korean.")
 
 
@@ -194,6 +230,49 @@ def clean_trans(word: dict, wrong) -> dict | None:
     return {"wrong": out[:3]} if len(out) >= 3 else None
 
 
+def _point(x) -> str:
+    p = re.sub(r"\s+", " ", str(x or "")).strip()
+    return p[:80]
+
+
+def clean_gram(word: dict, g) -> dict | None:
+    """Điền ngữ pháp: target là cụm nguyên văn trong câu, answer nằm cuối target, 3 phương án nhiễu khác nhau."""
+    if not isinstance(g, dict):
+        return None
+    ex = word.get("example_ko") or ""
+    target, ans = str(g.get("target") or "").strip(), str(g.get("answer") or "").strip()
+    if not target or not ans or target not in ex or not target.endswith(ans) or not HANGUL.search(ans) or len(ans) > 10:
+        return None
+    seen, out = {norm_ko(ans)}, []
+    for d in _strs(g.get("distractors")):
+        k = norm_ko(d)
+        if k and k not in seen and HANGUL.search(d) and len(d) <= 12:
+            seen.add(k)
+            out.append(d)
+    if len(out) < 3:
+        return None
+    return {"target": target, "answer": ans, "distractors": out[:3], "point": _point(g.get("point"))}
+
+
+def clean_gfix(word: dict, g) -> dict | None:
+    """Câu đúng ngữ pháp: 3 câu sai khác câu gốc, độ dài tương đương."""
+    if not isinstance(g, dict):
+        return None
+    ex = word.get("example_ko") or ""
+    if not ex:
+        return None
+    seen, out = {norm_ko(ex)}, []
+    for s in _strs(g.get("wrong")):
+        k = norm_ko(s)
+        stutter = re.search(r"([가-힣])\1[.!?]?$", s) and not re.search(r"([가-힣])\1[.!?]?$", ex)   # lỗi vô nghĩa "해요요"
+        if k and k not in seen and HANGUL.search(s) and not stutter and .5 * len(ex) <= len(s) <= 1.6 * len(ex) + 4:
+            seen.add(k)
+            out.append(s)
+    if len(out) < 3:
+        return None
+    return {"wrong": out[:3], "point": _point(g.get("point"))}
+
+
 # ---------------------------------------------------------------- generation
 def _payload(words):
     return json.dumps([{"id": w["id"], "korean": w["korean"], "vietnamese": w["vietnamese"], "pos": w.get("pos", ""),
@@ -201,15 +280,17 @@ def _payload(words):
                       ensure_ascii=False)
 
 
-def _chunk(cfg, key, words, chat):
+def _chunk(cfg, key, words, chat, part="vocab"):
+    """part: vocab (điền từ + dịch câu) | gram (điền ngữ pháp + câu đúng ngữ pháp)."""
     provider = cfg["provider"]
     model = cfg["model_deepseek"] if provider == "deepseek" else cfg["model_openai"]
-    data = chat(provider, model, key, SYSTEM, ITEM_PROMPT.format(data=_payload(words)))
+    prompt, verify = (GRAM_PROMPT, GRAM_VERIFY) if part == "gram" else (ITEM_PROMPT, VERIFY_PROMPT)
+    data = chat(provider, model, key, SYSTEM, prompt.format(data=_payload(words)))
     items = [i for i in data.get("items", []) if isinstance(i, dict)]
     if cfg.get("verify") and items:
         blob = [{**i, "example_ko": w["example_ko"], "example_vi": w["example_vi"], "korean": w["korean"]}
                 for i in items for w in words if w["id"] == i.get("id")]
-        v = chat(provider, model, key, SYSTEM, VERIFY_PROMPT.format(data=json.dumps({"items": blob}, ensure_ascii=False)))
+        v = chat(provider, model, key, SYSTEM, verify.format(data=json.dumps({"items": blob}, ensure_ascii=False)))
         vi = [i for i in v.get("items", []) if isinstance(i, dict)]
         if len(vi) == len(items):
             items = vi
@@ -222,6 +303,12 @@ def _chunk(cfg, key, words, chat):
             continue
         if not w:
             continue
+        if part == "gram":
+            for kind, fn in (("gram", clean_gram), ("gfix", clean_gfix)):
+                c = fn(w, i.get(kind))
+                if c:
+                    out.append((w["id"], kind, c))
+            continue
         c = clean_cloze(w, i.get("cloze"))
         if c:
             out.append((w["id"], "cloze", c))
@@ -231,15 +318,16 @@ def _chunk(cfg, key, words, chat):
     return out
 
 
-def generate_items(words: list[dict], cfg: dict, key: str, chat=_chat, progress=None):
-    """words (có example_ko/example_vi) -> [(word_id, kind, data)]. Mục nào AI làm sai thì bỏ qua."""
+def generate_items(words: list[dict], cfg: dict, key: str, chat=_chat, progress=None, part="vocab"):
+    """words (có example_ko/example_vi) -> [(word_id, kind, data)]. Mục nào AI làm sai thì bỏ qua.
+    part: vocab (cloze, trans) | gram (gram, gfix)."""
     words = [w for w in words if w.get("example_ko") and w.get("example_vi")]
     chunks = [words[i:i + CHUNK] for i in range(0, len(words), CHUNK)]
     if not chunks:
         return []
     out, errors = [], []
     with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(chunks))) as ex:
-        futs = [ex.submit(_chunk, cfg, key, c, chat) for c in chunks]
+        futs = [ex.submit(_chunk, cfg, key, c, chat, part) for c in chunks]
         for f, c in zip(futs, chunks):
             try:
                 out += f.result()
@@ -259,7 +347,9 @@ def generate_items(words: list[dict], cfg: dict, key: str, chat=_chat, progress=
 # ---------------------------------------------------------------- bot trò chuyện trên live
 BOT_SYSTEM = """Bạn là Hami, linh vật dễ thương của một buổi livestream học từ vựng tiếng Hàn cho người Việt trên TikTok.
 Trên live đang chơi game "Săn Quái Chữ": người xem comment A/B/C/D trả lời câu hỏi, đúng thì gây sát thương lên quái, cả phòng cùng leo ải.
-Người xem gõ câu hỏi, bạn trả lời bằng tiếng Việt, thân thiện, vui vẻ, xưng "mình", gọi người xem là "bạn".
+Người xem gõ câu hỏi, bạn trả lời bằng tiếng Việt, xưng "Hami", gọi người xem là "bạn".
+Tính cách: láo lếu, ngang ngược, hay cà khịa kiểu đáng yêu (vd. "Câu dễ thế mà cũng hỏi à 😏 ..."), nhưng vẫn trả lời đúng và có ích.
+Cà khịa chỉ để vui: không chửi tục, không xúc phạm ngoại hình, gia đình, giới tính, vùng miền hay bất kỳ ai.
 Quy tắc:
 - Trả lời CỰC NGẮN: tối đa 1-2 câu, dưới 110 ký tự, có thể thêm 1 emoji.
 - Ưu tiên chủ đề học tiếng Hàn: nghĩa từ, cách đọc, ngữ pháp đơn giản, văn hoá Hàn. Có thể chào hỏi, tán gẫu nhẹ nhàng.
